@@ -7,9 +7,9 @@
 #' @details Requires using neonUtilities >= version 2.2.1
 # Changelog/contributions
 # 2021-05-21 Originally created, Claire Kermorvant
-# 2023-04-02 Update data acquisition & results display, generalized to multiple sites,
-#    change temp horizontal position from 101 (upstream) to 102 (downstream) Guy Litt
-#     Added temporal aggregation method (mean/max)
+# 2023-04-05 Update data acquisition & results display, generalized to multiple sites,
+#    change temp horizontal position from 101 (upstream) to 102 (downstream) 
+#    Added temporal aggregation method (mean/max) Guy Litt
 
 #TODO substitute end_date_time for start_date_time
 #TODO describe SWE as surface water elevation
@@ -34,7 +34,7 @@ library(svglite)
 # library(devtools)
 # 
 # install package in github used for custom plotting
-devtools::install_github(repo = "https://github.com/remichel/rmTools.git")
+# devtools::install_github(repo = "https://github.com/remichel/rmTools.git")
 ###########################################
 ### download data of interest from NEON ###
 ###########################################
@@ -61,7 +61,7 @@ waq_cols_sel <- c("startDateTime","horizontalPosition",  "specificConductance","
                   "dissolvedOxygen","dissolvedOxygenFinalQF","dissolvedOxygenSaturation",
                   "dissolvedOxygenSatFinalQF","pH","pHFinalQF",               
                   "chlorophyll","chlorophyllFinalQF","turbidity",                
-                  "turbidityFinalQF","fDOM","fDOMFinalQF")
+                  "turbidityFinalQF","fDOM","fDOMFinalQFSciRvw")
 
 
 # ---------------------------------------------------------------------------- #
@@ -144,14 +144,19 @@ print("Finished data download")
 #     Conduct analysis by site
 # ---------------------------------------------------------------------------- #
 
+siteNameDf <- base::list(siteID = c("ARIK","CARI","LEWI"),
+                         siteName = c("Arikaree River","Caribou Creek","Lewis Run"))
+
 # Extract water quality units from variables file:
 origUnits <- unlist(lapply(waq_cols_sel, function(x) waq$variables_20288$units[which(waq$variables_20288$fieldName==x)] ))
 dfUnits <- data.frame(orig_cols = waq_cols_sel, units = origUnits)
 print(dfUnits)
 
-
+lsPlotTs <- base::list()
+lsFig2 <- base::list()
 
 for(site in neon_sites){
+  siteName <- siteNameDf$siteName[siteNameDf$siteID == site]
   print(paste0("Conducting analysis for NEON siteID = ",site))
   
   # Filter for water quality data at NEON's downstream stations
@@ -176,7 +181,8 @@ for(site in neon_sites){
       chloro = chlorophyll,
       label_chloro = chlorophyll_final_qf,
       label_turbidity = turbidity_final_qf,
-      label_fdom = f_dom_final_qf
+      fdom = f_dom,
+      label_fdom = f_dom_final_qf_sci_rvw
     )
   # TODO add 15-min aggregation interval here??
 
@@ -263,8 +269,10 @@ for(site in neon_sites){
   # data_site$spec_cond = if_else(data_site$spec_cond < 100, NA_real_ , data_site$spec_cond) #TODO Edit GL - low SpC can be valid
   # data_site$nitrate_mean = if_else(data_site$nitrate_mean  > 25, NA_real_ , data_site$nitrate_mean) #TODO Edit GL - high NO3 can be valid
   data_site$nitrate_mean = if_else(data_site$nitrate_mean <= 0, NA_real_ , data_site$nitrate_mean)
-  
-  
+  # Remove poor quality CARI turbidity data:
+  if(site == "CARI"){
+    data_site$turbidity[data_site$turbidity > 500] <- NA_real_
+  }
   # Create a time_recod column
   #TODO Problem here, failed to gap-fill first!
   # data_site$time_recod <- seq(from = 1, to = nrow(data_site))
@@ -283,15 +291,15 @@ for(site in neon_sites){
   
   data<-data_site
   dataPlot <- data %>% dplyr::select(start_date_time, nitrate_mean, turbidity, 
-                                     temp_mean, spec_cond, oxygen ) %>% 
+                                     temp_mean, elev, spec_cond, oxygen ) %>% 
     dplyr::rename(time= start_date_time, Nitrate=nitrate_mean,
-           Temp=temp_mean, SpC=spec_cond, DO= oxygen )
+           Temp=temp_mean,SWE=elev, SpC=spec_cond, DO= oxygen )
 
   
   # Assign units: nitrate : micromoles/L; fDOM : QSU; turbidity : FNU, DO : mg/L; SpC microsiemens per Centimeter; 
   dfUnits <-  data.frame(var = names(dataPlot)[-1],
-             units = c("\u03BCMol/L","FNU","°C", "\u03BCS/cm", "mg/L"))
-  dfUnits <- rbind(dfUnits,data.frame(var="SWE",units="m")) # add in elevation
+             units = c("\u03BCMol/L","FNU","°C", "m", "\u03BCS/cm", "mg/L"))
+  # dfUnits <- rbind(dfUnits,data.frame(var="SWE",units="m")) # add in elevation
 
   longDf <- dataPlot %>% pivot_longer(-time, names_to = "variable") 
   longDf <- merge(longDf,dfUnits, by.x = "variable", by.y = "var")
@@ -309,7 +317,7 @@ for(site in neon_sites){
     scale_x_datetime(date_labels ="%Y-%m") +
     theme_minimal() +
     theme(legend.position = "none") + 
-    ggtitle(paste0(site, " timeseries data"))
+    ggtitle(paste0(siteName, " timeseries data"))
     # theme_light()
   ggsave(plot = plotTs,
          filename = file.path(plot_dir,paste0("timeseries_",site,".png")),
@@ -317,166 +325,99 @@ for(site in neon_sites){
   ggsave(plot = plotTs,
          filename = file.path(plot_dir,paste0("timeseries_",site,".svg")),
          height = 7,width = 5, units = "in")
-  
+  lsPlotTs[[site]] <- plotTs
   #################
-  ### Figure X  ###
+  ### Figure 2  ###
   #################
-  # CustomFacetWrap <- ggproto(
-  #   "CustomFacetWrap", FacetWrap,
-  #   init_scales = function(self, layout, x_scale = NULL, y_scale = NULL, params) {
-  #     # make the initial x, y scales list
-  #     scales <- ggproto_parent(FacetWrap, self)$init_scales(layout, x_scale, y_scale, params)
-  #     
-  #     if(is.null(params$scale_overrides)) return(scales)
-  #     
-  #     max_scale_x <- length(scales$x)
-  #     max_scale_y <- length(scales$y)
-  #     
-  #     # ... do some modification of the scales$x and scales$y here based on params$scale_overrides
-  #     for(scale_override in params$scale_overrides) {
-  #       which <- scale_override$which
-  #       scale <- scale_override$scale
-  #       
-  #       if("x" %in% scale$aesthetics) {
-  #         if(!is.null(scales$x)) {
-  #           if(which < 0 || which > max_scale_x) stop("Invalid index of x scale: ", which)
-  #           scales$x[[which]] <- scale$clone()
-  #         }
-  #       } else if("y" %in% scale$aesthetics) {
-  #         if(!is.null(scales$y)) {
-  #           if(which < 0 || which > max_scale_y) stop("Invalid index of y scale: ", which)
-  #           scales$y[[which]] <- scale$clone()
-  #         }
-  #       } else {
-  #         stop("Invalid scale")
-  #       }
-  #     }
-  #     
-  #     # return scales
-  #     scales
-  #   }
-  # )
-  # 
-  # # Custom function from https://github.com/remichel/rmTools/blob/master/R/facet_wrap_costum.R
-  # facet_wrap_custom <- function(..., scale_overrides = NULL) {
-  #   # take advantage of the sanitizing that happens in facet_wrap
-  #   facet_super <- facet_wrap(...)
-  #   
-  #   # sanitize scale overrides
-  #   if(inherits(scale_overrides, "scale_override")) {
-  #     scale_overrides <- list(scale_overrides)
-  #   } else if(!is.list(scale_overrides) ||
-  #             !all(vapply(scale_overrides, inherits, "scale_override", FUN.VALUE = logical(1)))) {
-  #     stop("scale_overrides must be a scale_override object or a list of scale_override objects")
-  #   }
-  #   
-  #   facet_super$params$scale_overrides <- scale_overrides
-  #   
-  #   ggproto(NULL, CustomFacetWrap,
-  #           shrink = facet_super$shrink,
-  #           params = facet_super$params
-  #   )
-  # }
-  # 
-  # scale_override <- function(which, scale) {
-  #   # Custom function from https://github.com/remichel/rmTools/blob/master/R/scale_override.R
-  #   if(!is.numeric(which) || (length(which) != 1) || (which %% 1 != 0)) {
-  #     stop("which must be an integer of length 1")
-  #   }
-  #   
-  #   if(is.null(scale$aesthetics) || !any(c("x", "y") %in% scale$aesthetics)) {
-  #     stop("scale must be an x or y position scale")
-  #   }
-  #   
-  #   structure(list(which = which, scale = scale), class = "scale_override")
-  # }
-  
-  # Add surface water elevation to units
-
-  
+  #TODO ensure SWE is described in figure caption
   if(site == "ARIK" || site == "CARI"){
     # arik 5 days
     start <- which(data_site$start_date_time == "2019-07-01 10:00:00 UTC")
     end <- which(data_site$start_date_time == "2019-07-06 10:00:00 UTC")
   } else if (site == "LEWI"){
-    # TODO determine if this is the appropriate date range/year
-    start <- which(data_site$start_date_time == "2019-03-22 10:00:00 UTC")
-    end <- which(data_site$start_date_time == "2019-03-27 10:00:00 UTC")
+    # TODO determine if this is the appropriate date range 
+    start <- which(data_site$start_date_time == "2018-03-22 10:00:00 UTC")
+    end <- which(data_site$start_date_time == "2018-03-27 10:00:00 UTC")
   }
+
+  sub_data <-data_site[c(start:end),] %>%  dplyr::select(start_date_time, nitrate_mean, turbidity, temp_mean, spec_cond, oxygen, elev) %>%
+    dplyr::rename(start_date_time = start_date_time, Nitrate = nitrate_mean, DO = oxygen, SpC =  spec_cond, SWE = elev, Temp = temp_mean, turbidity = turbidity)
+  data_piv <- sub_data %>% pivot_longer(-start_date_time, names_to = "variable")
   
-  # TODO add water level
-  
-  data_piv <-data_site[c(start:end),] %>%  dplyr::select(start_date_time, nitrate_mean, turbidity, temp_mean, spec_cond, oxygen, elev) %>%
-    dplyr::rename(start_date_time = start_date_time, "Nitrate" = nitrate_mean, DO = oxygen, SpC =  spec_cond, SWE = elev, Temp = temp_mean, turbidity = turbidity) %>%
-    pivot_longer(-start_date_time, names_to = "variable")
   data_piv <- merge(data_piv,dfUnits, by.x = "variable", by.y = "var")
   data_piv$lablUnit <- paste0(data_piv$variable, " [",data_piv$units,"]")
   
   
   plotFig2_top <- data_piv %>%
-    ggplot(aes(x = start_date_time , y = value, col = variable)) + ggtitle("Arikaree") +
+    ggplot(aes(x = start_date_time , y = value, col = variable)) + 
+    ggtitle(siteName) +
     geom_line() +
     facet_grid(rows = vars(lablUnit),  scales = "free", space="free_x") +
-  
-    # facet_wrap_custom(~ variable,  ncol = 1, scales = "free_y", strip.position="right",  scale_overrides = list(
-    #   scale_override(1, scale_y_continuous(breaks = c(535,540))),
-    #   scale_override(2, scale_y_continuous(breaks = c(1179.75,1179.79))),
-    #   scale_override(3, scale_y_continuous(breaks = c(4,6))),
-    #   scale_override(4, scale_y_continuous(breaks = c(2.5,7.5))),
-    #   scale_override(5, scale_y_continuous(breaks = c(21,25))),
-    #   scale_override(6, scale_y_continuous(breaks = c(3,7)))
-    # )) +
-    labs(y = "", x = "time") +
-    scale_x_datetime(date_labels ="%b:%d", breaks=scales::date_breaks("1 day")) +
+    labs(y = "", x = "") +
+    scale_x_datetime(date_labels ="%Y%m%d", breaks=scales::date_breaks("1 day")) +
     theme_minimal() +
     theme(legend.position = "none",
           strip.text.y = element_text(size = 6),
           axis.text.y= element_text(size = 8),
-          axis.text.x= element_text(size = 8))
+          axis.text.x= element_text(size = 8, angle=30))
+  
+  
   
   if(site == "ARIK" || site == "LEWI"){
     # arik with peack
     start2 <- which(data_site$start_date_time == "2019-07-20 19:15:00 UTC")
     end2 <- which(data_site$start_date_time == "2019-07-23 19:15:00 UTC")
+  } else if (site == "LEWI"){
+    start2 <- which(data_site$start_date_time == "2019-07-21 19:15:00 UTC")
+    end2 <- which(data_site$start_date_time == "2019-07-24 19:15:00 UTC")
   } else if (site == "CARI"){
     # TODO determine if this is the appropriate date range/ year
     start2 <- which(data_site$start_date_time == "2019-08-01 22:00:00 UTC")
     end2 <- which(data_site$start_date_time == "2019-08-06 10:00:00 UTC")
   }
   
-  data_piv2<-data_site[c(start:end),] 
-  data %>%
-    dplyr::select(start_date_time, nitrate_mean, turbidity, temp_mean, spec_cond, oxygen, elev ) %>%
-    dplyr::rename(start_date_time = start_date_time, Elev. = elev, "N03-" = nitrate_mean, O2 = oxygen, Cond =  spec_cond, Temp. = temp_mean, Turb. = turbidity) %>%
-    pivot_longer(-start_date_time, names_to = "variable") %>%
+  data_piv2<-data_site[c(start2:end2),] %>%  dplyr::select(start_date_time, nitrate_mean, turbidity, temp_mean, spec_cond, oxygen, elev) %>%
+    dplyr::rename(start_date_time = start_date_time, Nitrate = nitrate_mean, DO = oxygen, SpC =  spec_cond, SWE = elev, Temp = temp_mean, turbidity = turbidity) %>% 
+    tidyr::pivot_longer(-start_date_time, names_to = "variable")
+  data_piv2 <- merge(data_piv2,dfUnits, by.x = "variable", by.y = "var")
+  data_piv2$lablUnit <- paste0(data_piv2$variable, " [",data_piv2$units,"]")
+  
+  
+  plotFig2_bttm <- data_piv2 %>%
+    # dplyr::select(start_date_time, nitrate_mean, turbidity, temp_mean, spec_cond, oxygen, elev ) %>%
+    # dplyr::rename(start_date_time = start_date_time, Elev. = elev, "N03-" = nitrate_mean, O2 = oxygen, Cond =  spec_cond, Temp. = temp_mean, Turb. = turbidity) %>%
+    # pivot_longer(-start_date_time, names_to = "variable") %>%
     ggplot(aes(x = start_date_time , y = value, col = variable)) +
-    geom_point() +
-    facet_wrap_custom(~ variable,  ncol = 1, scales = "free_y", strip.position="right",  scale_overrides = list(
-      scale_override(1, scale_y_continuous(breaks = c(400,550))),
-      scale_override(2, scale_y_continuous(breaks = c(1179.52,1179.60))),
-      scale_override(3, scale_y_continuous(breaks = c(0,15))),
-      scale_override(4, scale_y_continuous(breaks = c(2,6))),
-      scale_override(5, scale_y_continuous(breaks = c(20,27.5))),
-      scale_override(6, scale_y_continuous(breaks = c(10,40)))
-    )) +
+    geom_line() +
+    facet_grid(rows = vars(lablUnit),  scales = "free", space="free_x") +
     labs(y = "", x = "") +
-    scale_x_datetime(date_labels ="%b %d", breaks=date_breaks("1 day")) +
-    
+    scale_x_datetime(date_labels ="%Y%m%d", breaks=scales::date_breaks("1 day")) +
+    theme_minimal() +
     theme(legend.position = "none",
           strip.text.y = element_text(size = 6),
           axis.text.y= element_text(size = 8),
-          axis.text.x= element_text(size = 8))
+          axis.text.x= element_text(size = 8,angle=30))
   
   
+  # Combine top and bottom plots into single panel:
+  
+  plotZoomTsFig2 <- gridPrint(plotFig2_top,plotFig2_bttm, ncol = 1)
+  lsFig2[[site]] <- plotZoomTsFig2
+  
+  ggsave(plot=plotZoomTsFig2,
+         filename=file.path(plot_dir,paste0("Figure_2_ZoomTS_",site,".png")))
+  ggsave(plot=plotZoomTsFig2,
+         filename=file.path(plot_dir,paste0("Figure_2_ZoomTS_",site,".png")))
+
   ################
   ### Figure 1 (boxplots) ### 
   ################
+  sel_cols <- c("nitrate_mean","temp_mean","spec_cond","oxygen")
   
-  
-  data_plot_site<-cbind(data_site[,c(2,4,6,8)], log(data_site$turbidity +1))
+  data_plot_site<-cbind(data_site[,sel_cols], log(data_site$turbidity +1))
   colnames(data_plot_site) <- c("Nitrate","Temperature","Spec. Cond.", "Oxygen C.", "log_Turbidity")
   data_plot_site<-melt(data_plot_site)
-  data_plot_site$site<-rep("Arikaree", length = length(data_plot_site[,1]))
+  data_plot_site$site<-rep(siteName, length = length(data_plot_site[,1]))
   
   gg<-ggplot(data = data_plot_site[which(data_plot_site$variable == "Nitrate"),], aes(factor(1), value, color = site)) +
     geom_boxplot() +  facet_wrap(~variable,scales="free",ncol=3)+ 
@@ -665,7 +606,7 @@ for(site in neon_sites){
   ################
   
   total_imp<- site_imp
-  total_imp$site<-c( rep("Arikaree", 6))
+  total_imp$site<-c( rep(siteName, 6))
   
   total_imp %>%
     ggplot(aes(x = Importance, y = Var, color = site, shape = site)) +
@@ -685,4 +626,14 @@ for(site in neon_sites){
           axis.line = element_line(color = "grey") )
   
 }
+
+# Combine panels to create Figure 2:
+plotAllFig2 <- mgcViz::gridPrint(lsFig2[[1]],lsFig2[[2]],lsFig2[[3]], ncol=3)
+ggplot2::ggsave(plot=plotAllFig2,
+                filename=file.path(plot_dir,"Fig_2_all_sites.png"),
+                width = 10, height = 8)
+ggplot2::ggsave(plot=plotAllFig2,
+                filename=file.path(plot_dir,"Fig_2_all_sites.svg"),
+                width = 10, height = 8)
+
 
