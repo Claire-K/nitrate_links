@@ -1,0 +1,1566 @@
+---
+title: "paper_estimates_fig"
+output:
+  pdf_document: 
+    toc: yes
+  html_document: default
+---
+ 
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# Load required packages
+library(tidyverse)
+library(mgcv)
+library(mgcViz)
+library(tsibble)
+library(feasts)
+library(lubridate)
+library(forecast)
+library(modelr)
+
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+#detach("package:relaimpo", unload=TRUE)
+#detach("package:MASS", unload=TRUE)
+
+# download data of interest - Water Quality
+if(file.exists("waq_arik.rda")) {
+    waq_arik <- readRDS("waq_arik.rda")
+  } else {
+    waq_arik <- neonUtilities::loadByProduct(
+      dpID = "DP1.20288.001",
+      site = "ARIK",
+      startdate = "2018-01",
+      enddate = "2019-12",
+      package = "expanded",
+      token = Sys.getenv("NEON_TOKEN"),
+      check.size = FALSE
+    )
+    saveRDS(waq_arik, "waq_arik.rda")
+  }
+
+# Take only water quality at the down station
+water_quality_arik <- waq_arik$waq_instantaneous %>%
+  as_tibble() %>%
+  janitor::clean_names() %>%
+  filter(horizontal_position == "102") %>%
+  select(c(5,19,31,33,45,47,59,61,73,75,87,89,101,103,118)) %>%
+  mutate(
+    start_date_time = ymd_hms(start_date_time) - second(start_date_time)
+  ) %>%
+  rename(
+    spec_cond = specific_conductance,
+    label_spec_cond = specific_cond_final_qf,
+    oxygen = dissolved_oxygen,
+    label_oxygen = dissolved_oxygen_final_qf,
+    oxygen_sat = dissolved_oxygen_saturation,
+    label_oxygen_sat = dissolved_oxygen_sat_final_qf,
+    ph = p_h,
+    label_ph = p_h_final_qf,
+    chloro = chlorophyll,
+    label_chloro = chlorophyll_final_qf,
+    label_turbidity = turbidity_final_qf,
+    label_f_dom = f_dom_final_qf
+  )
+
+# download data of interest - Nitrate in Suface Water
+if(file.exists("nsw_arik.rda")) {
+    nsw_arik <- readRDS("nsw_arik.rda")
+  } else {
+    nsw_arik <-  neonUtilities::loadByProduct(
+      dpID="DP1.20033.001",
+      site="ARIK",
+      startdate = "2018-01",
+      enddate = "2019-12",
+      package="expanded",
+      token = Sys.getenv("NEON_TOKEN"),
+      check.size = FALSE
+    )
+    saveRDS(nsw_arik, "nsw_arik.rda")
+  }
+
+# Extract nitrate at 15 minute intervals
+nitrate_arik <- nsw_arik$NSW_15_minute %>%
+  as_tibble() %>%
+  janitor::clean_names() %>%
+  mutate(
+    start_date_time = ymd_hms(start_date_time) - second(start_date_time)
+  ) %>%
+  select(c(start_date_time, surf_water_nitrate_mean, final_qf)) %>%
+  rename(
+    nitrate_mean = surf_water_nitrate_mean,
+    label_nitrate_mean = final_qf
+  )
+
+# download data of interest - Temperature Suface Water
+if(file.exists("temp_arik.rda")) {
+    temp_arik <- readRDS("temp_arik.rda")
+  } else {
+    temp_arik <-  neonUtilities::loadByProduct(
+      dpID="DP1.20053.001",
+      site="ARIK",
+      startdate = "2018-01",
+      enddate = "2019-12",
+      package="expanded",
+      token = Sys.getenv("NEON_TOKEN"),
+      check.size = FALSE
+    )
+    saveRDS(temp_arik, "temp_arik.rda")
+  }
+
+# Extract temperature at 15 minute intervals
+temp_arik <- temp_arik$TSW_5min %>%
+  as_tibble() %>%
+  janitor::clean_names()  %>%
+  filter(horizontal_position == "101") %>%
+  mutate(start_date_time = ymd_hms(start_date_time) - second(start_date_time)) %>%
+  select(c(start_date_time, surf_water_temp_mean, final_qf)) %>%
+  rename(
+    temp_mean = surf_water_temp_mean,
+    label_temp_mean = final_qf
+  )
+
+
+#detach("package:relaimpo", unload=TRUE)
+#detach("package:MASS", unload=TRUE)
+
+# download data of interest - ELEVATION
+if(file.exists("level_arik.rda")) {
+    level_arik <- readRDS("level_arik.rda")
+  } else {
+    level_arik <- neonUtilities::loadByProduct(
+      dpID = "DP1.20016.001",
+      site = "ARIK",
+      startdate = "2018-01",
+      enddate = "2019-12",
+      package = "expanded",
+      token = Sys.getenv("NEON_TOKEN"),
+      check.size = FALSE
+    )
+    saveRDS(level_arik, "level_arik.rda")
+  }
+
+# Take only water quality at the down station
+level_arik <- level_arik$EOS_5_min %>%
+  as_tibble() %>%
+  janitor::clean_names() %>%
+  filter(horizontal_position == "101") %>%
+  select(c(5,7,37)) %>%
+  mutate(
+    start_date_time = ymd_hms(start_date_time) - second(start_date_time)
+  ) %>%
+  rename(
+    elev = surfacewater_elev_mean,
+    label_elev = s_wat_elev_final_qf,
+    )
+
+
+# Join water_quality and nitrate, and clean up
+data_arik <- left_join(
+  nitrate_arik,
+  temp_arik,
+    by = "start_date_time")
+   
+data_arik <- left_join(
+  data_arik,
+  water_quality_arik,
+    by = "start_date_time") 
+ 
+data_arik <- left_join(
+  data_arik ,
+  level_arik,
+    by = "start_date_time") 
+ 
+
+data_arik <- data_arik %>%
+  mutate(
+    spec_cond = if_else(label_spec_cond == 1, NA_real_, spec_cond),
+    oxygen = if_else(label_oxygen == 1, NA_real_, oxygen),
+    oxygen_sat = if_else(label_oxygen_sat == 1, NA_real_, oxygen_sat),
+    turbidity = if_else(label_turbidity == 1, NA_real_, turbidity),
+    ph = if_else(label_ph == 1, NA_real_, ph),
+    chloro = if_else(label_chloro == 1, NA_real_, chloro),
+    f_dom = if_else(label_f_dom == 1, NA_real_, f_dom),
+    temp_mean = if_else(label_temp_mean == 1, NA_real_, temp_mean),
+    elev = if_else(label_elev == 1, NA_real_ , elev),
+    nitrate_mean = if_else(label_nitrate_mean == 1, NA_real_ , nitrate_mean)
+  )  %>%
+  distinct(start_date_time, .keep_all=TRUE)
+
+#data_arik = distinct(data_arik, start_date_time, .keep_all = TRUE)
+data_arik$turbidity = if_else(data_arik$turbidity < 0, NA_real_ , data_arik$turbidity)
+data_arik$spec_cond = if_else(data_arik$spec_cond < 100, NA_real_ , data_arik$spec_cond)
+data_arik$nitrate_mean = if_else(data_arik$nitrate_mean  > 25, NA_real_ , data_arik$nitrate_mean)
+data_arik$nitrate_mean = if_else(data_arik$nitrate_mean <= 0, NA_real_ , data_arik$nitrate_mean)
+data_arik$f_dom = if_else(data_arik$f_dom  > 140, NA_real_ , data_arik$f_dom)
+
+```
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+#detach("package:MASS", unload=TRUE)
+
+# download data of interest - Water Quality
+if(file.exists("waq_king.rda")) {
+  waq_king <- readRDS("waq_king.rda")
+} else {
+  waq_king <- neonUtilities::loadByProduct(
+    dpID = "DP1.20288.001",
+    site = "KING",
+startdate = "2019-01",
+      enddate = "2020-10",
+    package = "expanded",
+    token = Sys.getenv("NEON_TOKEN"),
+    check.size = FALSE
+  )
+  saveRDS(waq_king, "waq_king.rda")
+}
+
+# Take only water quality at the down station
+water_quality_king <- waq_king$waq_instantaneous %>%
+  as_tibble() %>%
+  janitor::clean_names() %>%
+  filter(horizontal_position == "102") %>%
+  select(c(5,19,31,33,45,47,59,61,73,75,87,89,101,103,118)) %>%
+  mutate(
+    start_date_time = ymd_hms(start_date_time) - second(start_date_time)
+  ) %>%
+  rename(
+    spec_cond = specific_conductance,
+    label_spec_cond = specific_cond_final_qf,
+    oxygen = dissolved_oxygen,
+    label_oxygen = dissolved_oxygen_final_qf,
+    oxygen_sat = dissolved_oxygen_saturation,
+    label_oxygen_sat = dissolved_oxygen_sat_final_qf,
+    ph = p_h,
+    label_ph = p_h_final_qf,
+    chloro = chlorophyll,
+    label_chloro = chlorophyll_final_qf,
+    label_turbidity = turbidity_final_qf,
+    label_f_dom = f_dom_final_qf
+  )
+
+# download data of interest - Nitrate in Suface Water
+if(file.exists("nsw_king.rda")) {
+  nsw_king <- readRDS("nsw_king.rda")
+} else {
+  nsw_king <-  neonUtilities::loadByProduct(
+    dpID="DP1.20033.001",
+    site="KING",
+startdate = "2019-01",
+      enddate = "2020-10",
+    package="expanded",
+    token = Sys.getenv("NEON_TOKEN"),
+    check.size = FALSE
+  )
+  saveRDS(nsw_king, "nsw_king.rda")
+}
+
+# Extract nitrate at 15 minute intervals
+nitrate_king <- nsw_king$NSW_15_minute %>%
+  as_tibble() %>%
+  janitor::clean_names() %>%
+  mutate(
+    start_date_time = ymd_hms(start_date_time) - second(start_date_time)
+  ) %>%
+  select(c(start_date_time, surf_water_nitrate_mean, final_qf)) %>%
+  rename(
+    nitrate_mean = surf_water_nitrate_mean,
+    label_nitrate_mean = final_qf
+  )
+
+
+
+# download data of interest - Temperature Suface Water
+if(file.exists("temp_king.rda")) {
+    temp_king <- readRDS("temp_king.rda")
+  } else {
+    temp_king <-  neonUtilities::loadByProduct(
+      dpID="DP1.20053.001",
+      site="KING",
+      startdate = "2019-01",
+      enddate = "2020-10",
+      package="expanded",
+      token = Sys.getenv("NEON_TOKEN"),
+      check.size = FALSE
+    )
+    saveRDS(temp_king, "temp_king.rda")
+  }
+
+# Extract nitrate at 15 minute intervals
+temp_king <- temp_king$TSW_5min %>%
+  as_tibble() %>%
+  janitor::clean_names()  %>%
+  filter(horizontal_position == "101") %>%
+  mutate(start_date_time = ymd_hms(start_date_time) - second(start_date_time)) %>%
+  select(c(start_date_time, surf_water_temp_mean, final_qf)) %>%
+  rename(
+    temp_mean = surf_water_temp_mean,
+    label_temp_mean = final_qf
+  )
+
+
+
+
+# Join water_quality and nitrate, and clean up
+data_king <- left_join(
+  nitrate_king,
+  temp_king,
+    by = "start_date_time")
+   
+data_king <- left_join(
+  data_king,
+  water_quality_king,
+    by = "start_date_time") 
+
+ 
+   
+data_king <-data_king %>%
+  mutate(
+    spec_cond = if_else(label_spec_cond == 1, NA_real_, spec_cond),
+    oxygen = if_else(label_oxygen == 1, NA_real_, oxygen),
+    oxygen_sat = if_else(label_oxygen_sat == 1, NA_real_, oxygen_sat),
+    turbidity = if_else(label_turbidity == 1, NA_real_, turbidity),
+    ph = if_else(label_ph == 1, NA_real_, ph),
+    chloro = if_else(label_chloro == 1, NA_real_, chloro),
+    f_dom = if_else(label_f_dom == 1, NA_real_, f_dom),
+    temp_mean = if_else(label_temp_mean == 1, NA_real_, temp_mean),
+    nitrate_mean = if_else(label_nitrate_mean == 1, NA_real_ , nitrate_mean),
+    time = row_number()
+  ) %>%
+  distinct(start_date_time, .keep_all=TRUE)
+
+data_king$nitrate_mean = if_else(data_king$nitrate_mean <= 0, NA_real_ , data_king$nitrate_mean)
+data_king$turbidity = if_else(data_king$turbidity < 0, NA_real_ , data_king$turbidity)
+data_king$temp_mean = if_else(data_king$temp_mean < 0, NA_real_ , data_king$temp_mean)
+```
+
+
+
+
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# detach("package:MASS", unload=TRUE)
+# download data of interest - Water Quality
+if(file.exists("waq.rda")) {
+    waq <- readRDS("waq.rda")
+  } else {
+    waq <- neonUtilities::loadByProduct(
+      dpID = "DP1.20288.001",
+      site = "CARI",
+      startdate = "2018-01",
+      enddate = "2019-12",
+      package = "expanded",
+      token = Sys.getenv("NEON_TOKEN"),
+      check.size = FALSE
+    )
+    saveRDS(waq, "waq.rda")
+  }
+
+# Take only water quality at the down station
+water_quality <- waq$waq_instantaneous %>%
+  as_tibble() %>%
+  janitor::clean_names() %>%
+  filter(horizontal_position == "102") %>%
+  select(c(5,19,31,33,45,47,59,61,73,75,87,89,101,103,118)) %>%
+  mutate(
+    start_date_time = ymd_hms(start_date_time) - second(start_date_time)
+  ) %>%
+  rename(
+    spec_cond = specific_conductance,
+    label_spec_cond = specific_cond_final_qf,
+    oxygen = dissolved_oxygen,
+    label_oxygen = dissolved_oxygen_final_qf,
+    oxygen_sat = dissolved_oxygen_saturation,
+    label_oxygen_sat = dissolved_oxygen_sat_final_qf,
+    ph = p_h,
+    label_ph = p_h_final_qf,
+    chloro = chlorophyll,
+    label_chloro = chlorophyll_final_qf,
+    label_turbidity = turbidity_final_qf,
+    label_f_dom = f_dom_final_qf
+  )
+
+# download data of interest - Nitrate in Suface Water
+if(file.exists("nsw.rda")) {
+    nsw <- readRDS("nsw.rda")
+  } else {
+    nsw <-  neonUtilities::loadByProduct(
+      dpID="DP1.20033.001",
+      site="CARI",
+     startdate = "2018-01",
+      enddate = "2019-12",
+      package="expanded",
+      token = Sys.getenv("NEON_TOKEN"),
+      check.size = FALSE
+    )
+    saveRDS(nsw, "nsw.rda")
+  }
+
+# Extract nitrate at 15 minute intervals
+nitrate <- nsw$NSW_15_minute %>%
+  as_tibble() %>%
+  janitor::clean_names() %>%
+  mutate(
+    start_date_time = ymd_hms(start_date_time) - second(start_date_time)
+  ) %>%
+  select(c(start_date_time, surf_water_nitrate_mean, final_qf)) %>%
+  rename(
+    nitrate_mean = surf_water_nitrate_mean,
+    label_nitrate_mean = final_qf
+  )
+
+
+
+
+# download data of interest - Temperature Suface Water
+if(file.exists("temp_cari.rda")) {
+    temp_cari <- readRDS("temp_cari.rda")
+  } else {
+    temp_cari <-  neonUtilities::loadByProduct(
+      dpID="DP1.20053.001",
+      site="CARI",
+      startdate = "2018-01",
+      enddate = "2019-12",
+      package="expanded",
+      token = Sys.getenv("NEON_TOKEN"),
+      check.size = FALSE
+    )
+    saveRDS(temp_cari, "temp_cari.rda")
+  }
+
+# Extract nitrate at 15 minute intervals
+temp_cari <- temp_cari$TSW_5min %>%
+  as_tibble() %>%
+  janitor::clean_names()  %>%
+  filter(horizontal_position == "101") %>%
+  mutate(start_date_time = ymd_hms(start_date_time) - second(start_date_time)) %>%
+  select(c(start_date_time, surf_water_temp_mean, final_qf)) %>%
+  rename(
+    temp_mean = surf_water_temp_mean,
+    label_temp_mean = final_qf
+  )
+
+
+# Join water_quality and nitrate, and clean up
+data_cari <- left_join(
+  nitrate,
+  temp_cari,
+    by = "start_date_time")
+   
+data_cari <- left_join(
+  data_cari,
+  water_quality,
+    by = "start_date_time") 
+ 
+data_cari <- data_cari %>%
+  mutate(
+    spec_cond = if_else(label_spec_cond == 1, NA_real_, spec_cond),
+    oxygen = if_else(label_oxygen == 1, NA_real_, oxygen),
+    oxygen_sat = if_else(label_oxygen_sat == 1, NA_real_, oxygen_sat),
+    turbidity = if_else(label_turbidity == 1, NA_real_, turbidity),
+    ph = if_else(label_ph == 1, NA_real_, ph),
+    chloro = if_else(label_chloro == 1, NA_real_, chloro),
+    f_dom = if_else(label_f_dom == 1, NA_real_, f_dom),
+    temp_mean = if_else(label_temp_mean == 1, NA_real_, temp_mean),
+    nitrate_mean = if_else(label_nitrate_mean == 1, NA_real_ , nitrate_mean),
+    time = row_number()
+  )
+
+data_cari = distinct(data_cari, start_date_time, .keep_all = TRUE)
+
+# data_cari$turbidity = if_else(data_cari$turbidity < 0, NA_real_ , data_cari$turbidity)
+data_cari$turbidity = if_else(data_cari$turbidity > 500, NA_real_ , data_cari$turbidity)
+# data_cari$chloro = if_else(data_cari$chloro > 10, NA_real_ , data_cari$chloro)
+# data_cari$f_dom = if_else(data_cari$f_dom > 300, NA_real_ , data_cari$f_dom)
+data_cari$nitrate_mean = if_else(data_cari$nitrate_mean > 50, NA_real_ , data_cari$nitrate_mean)
+data_cari$chloro = if_else(data_cari$chloro > 200, NA_real_ , data_cari$chloro)
+data_cari$spec_cond = if_else(data_cari$spec_cond > 300, NA_real_ , data_cari$spec_cond)
+```
+
+```{r}
+# add a colomn time recod to both site
+data_cari$time_recod <- seq(from = 1, to = nrow(data_cari))
+data_arik$time_recod <- seq(from = 1, to = nrow(data_arik))
+data_king$time_recod <- seq(from = 1, to = nrow(data_king))
+```
+
+
+
+# data at Caribou
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+data<-data_cari
+## Plot data
+data %>%
+  dplyr::select(start_date_time, nitrate_mean, turbidity, temp_mean, spec_cond, oxygen, elev ) %>%
+  rename("start_date_time" = start_date_time, "Nitrate" = nitrate_mean , "Turbidity" = turbidity, "Temperature" = temp_mean, "Spec.cond" = spec_cond, "Oxygen" =  oxygen , "Elevation" =  elev) %>%
+  pivot_longer(-start_date_time, names_to = "variable") %>%
+  ggplot(aes(x = start_date_time , y = value, col = variable)) +
+  geom_point() +
+  facet_grid(rows = vars(variable),  scales = "free", space="free_x") +
+  labs(y = "", x = "") +
+  scale_x_datetime(date_labels ="%Y-%m") +
+  theme(legend.position = "none")+
+  ggtitle("Caribou")
+
+
+```
+
+```{r}
+par(mfrow = c(2,2))
+plot(data$oxygen,data$nitrate_mean, ylab = "Nitrate", xlab = "Oxygen", pch = 16, cex = 0.5)
+plot(data$spec_cond, data$nitrate_mean, ylab = "Nitrate", xlab = "Spec. Conductance", pch = 16, cex = 0.5)
+plot(data$temp_mean,data$nitrate_mean, ylab = "Nitrate", xlab = "Temperature", pch = 16, cex = 0.5)
+plot(data$turbidity, data$nitrate_mean, ylab = "Nitrate", xlab = "Turbidity", pch = 16, cex = 0.5)
+```
+
+```{r message=FALSE, warning=FALSE}
+library(GGally)
+df <- data_cari[, c("temp_mean", "spec_cond", "oxygen", "turbidity","time_recod")]
+df$log_turbidity <- log(df$turbidity +1)
+df <- df[, c("temp_mean", "spec_cond", "oxygen", "log_turbidity","time_recod")]
+df %>%  ggpairs(., upper = list(continuous ="blank"), lower = list(continuous ="points"))
+```
+
+# data at Arikaree
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+data<-data_arik
+## Plot data
+data %>%
+  dplyr::select(start_date_time, nitrate_mean, turbidity, temp_mean, spec_cond, oxygen, elev ) %>%
+  rename("start_date_time" = start_date_time, "Nitrate" = nitrate_mean , "Turbidity" = turbidity, "Temperature" = temp_mean, "Spec.cond" = spec_cond, "Oxygen" =  oxygen, "Elev" = elev) %>%
+  pivot_longer(-start_date_time, names_to = "variable") %>%
+  ggplot(aes(x = start_date_time , y = value, col = variable)) +
+  geom_point() +
+  facet_grid(rows = vars(variable),  scales = "free", space="free_x") +
+  labs(y = "", x = "") +
+  scale_x_datetime(date_labels ="%Y-%m") +
+  theme(legend.position = "none")+
+  ggtitle("Arikaree")
+
+
+```
+
+```{r}
+par(mfrow = c(2,2))
+plot(data$oxygen,data$nitrate_mean, ylab = "Nitrate", xlab = "Oxygen", pch = 16, cex = 0.5)
+plot(data$spec_cond, data$nitrate_mean, ylab = "Nitrate", xlab = "Spec. Conductance", pch = 16, cex = 0.5)
+plot(data$temp_mean,data$nitrate_mean, ylab = "Nitrate", xlab = "Temperature", pch = 16, cex = 0.5)
+plot(data$turbidity, data$nitrate_mean, ylab = "Nitrate", xlab = "Turbidity", pch = 16, cex = 0.5)
+```
+
+```{r message=FALSE, warning=FALSE}
+library(GGally)
+df <- data_arik[, c("temp_mean", "spec_cond", "oxygen", "turbidity","time_recod")]
+df$log_turbidity <- log(df$turbidity +1)
+df <- df[, c("temp_mean", "spec_cond", "oxygen", "log_turbidity","time_recod")]
+df %>%  ggpairs(., upper = list(continuous ="blank"), lower = list(continuous ="points"))
+```
+
+# data at King
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+data<-data_king
+## Plot data
+data %>%
+  dplyr::select(start_date_time, nitrate_mean, turbidity, temp_mean, spec_cond, oxygen, elev ) %>%
+  rename("start_date_time" = start_date_time, "Nitrate" = nitrate_mean , "Turbidity" = turbidity, "Temperature" = temp_mean, "Spec.cond" = spec_cond, "Oxygen" =  oxygen, "Elevation" = elev) %>%
+  pivot_longer(-start_date_time, names_to = "variable") %>%
+  ggplot(aes(x = start_date_time , y = value, col = variable)) +
+  geom_point() +
+  facet_grid(rows = vars(variable),  scales = "free", space="free_x") +
+  labs(y = "", x = "Time") +
+  scale_x_datetime(date_labels ="%Y-%m") +
+  theme(legend.position = "none")+
+  ggtitle("Kings Creek")
+
+
+
+
+```
+
+```{r}
+par(mfrow = c(2,2))
+plot(data$oxygen,data$nitrate_mean, ylab = "Nitrate", xlab = "Oxygen", pch = 16, cex = 0.5)
+plot(data$spec_cond, data$nitrate_mean, ylab = "Nitrate", xlab = "Spec. Conductance", pch = 16, cex = 0.5)
+plot(data$temp_mean,data$nitrate_mean, ylab = "Nitrate", xlab = "Temperature", pch = 16, cex = 0.5)
+plot(data$turbidity, data$nitrate_mean, ylab = "Nitrate", xlab = "Turbidity", pch = 16, cex = 0.5)
+```
+
+```{r message=FALSE, warning=FALSE}
+library(GGally)
+df <- data_king[, c("temp_mean", "spec_cond", "oxygen", "turbidity","time_recod")]
+df$log_turbidity <- log(df$turbidity +1)
+df <- df[, c("temp_mean", "spec_cond", "oxygen", "log_turbidity","time_recod")]
+df %>%  ggpairs(., upper = list(continuous ="blank"), lower = list(continuous ="points"))
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+library(reshape2)
+data_plot_arik<-cbind(data_arik[,c(2,4,6,8)], log(data_arik$turbidity +1))
+colnames(data_plot_arik) <- c("Nitrate","Temperature","Spec. Cond.", "Oxygen C.", "log_Turbidity")
+data_plot_arik<-melt(data_plot_arik)
+data_plot_arik$site<-rep("Arikaree", length = length(data_plot_arik[,1]))
+
+data_cari1<-data_cari[7010:22848,]
+data_plot_cari<-cbind(data_cari1[,c(2,4,6,8)], log(data_cari1$turbidity +1))
+colnames(data_plot_cari) <- c("Nitrate", "Temperature","Spec. Cond.", "Oxygen C.", "log_Turbidity")
+data_plot_cari<-melt(data_plot_cari)
+data_plot_cari$site<-rep("Caribou", length = length(data_plot_cari[,1]))
+
+data_plot_king<-cbind(data_king[,c(2,4,6,8)], log(data_king$turbidity +1))
+colnames(data_plot_king) <- c("Nitrate", "Temperature","Spec. Cond.", "Oxygen C.", "log_Turbidity")
+data_plot_king<-melt(data_plot_king)
+data_plot_king$site<-rep("Kings Creek", length = length(data_plot_king[,1]))
+
+
+
+data_both<- rbind(data_plot_arik, data_plot_cari, data_plot_king)
+
+
+gg<-ggplot(data = data_both[which(data_both$variable == "Nitrate"),], aes(factor(1), value, color = site)) +
+  geom_boxplot() +  facet_wrap(~variable,scales="free",ncol=3)+ 
+  scale_color_manual(values=c("#440154FF", "#277F8EFF", "#9FDA3AFF"))+
+  theme(axis.text.x=element_blank(),
+        axis.text.y= element_text(size = 11),
+        legend.text=element_text(size=15),
+        axis.title.x=element_blank(), 
+        axis.title.y = element_blank(),
+        legend.position="bottom",
+        legend.direction="vertical",
+        legend.title = element_blank(),
+        strip.text.x = element_text(size = 15))
+
+gg1<-ggplot(data = data_both[which(data_both$variable == "Temperature"),], aes(factor(1), value, color = site)) +
+  geom_boxplot() +  facet_wrap(~variable,scales="free",ncol=3)+ 
+  scale_color_manual(values=c("#440154FF", "#277F8EFF", "#9FDA3AFF"))+
+  theme(axis.text.x=element_blank(),
+        axis.text.y= element_text(size = 11),
+        axis.title.x=element_blank(), 
+        axis.title.y = element_blank(),
+        legend.position= "none",
+        legend.title = element_blank(),
+        strip.text.x = element_text(size = 15))
+
+gg2<-ggplot(data = data_both[which(data_both$variable == "Spec. Cond."),], aes(factor(1), value, color = site)) +
+  geom_boxplot() +  facet_wrap(~variable,scales="free",ncol=3)+ 
+  scale_color_manual(values=c("#440154FF", "#277F8EFF", "#9FDA3AFF"))+
+  theme(axis.text.x=element_blank(),
+        axis.text.y= element_text(size = 11),
+        axis.title.x=element_blank(), 
+        axis.title.y = element_blank(),
+        legend.position= "none",
+        legend.title = element_blank(),
+        strip.text.x = element_text(size = 15))
+gg3<-ggplot(data = data_both[which(data_both$variable == "Oxygen C."),], aes(factor(1), value, color = site)) +
+  geom_boxplot() +  facet_wrap(~variable,scales="free",ncol=3)+ 
+  scale_color_manual(values=c("#440154FF", "#277F8EFF", "#9FDA3AFF"))+
+  theme(axis.text.x=element_blank(),
+        axis.text.y= element_text(size = 11),
+        axis.title.x=element_blank(), 
+        axis.title.y = element_blank(),
+        legend.position= "none",
+        legend.title = element_blank(),
+        strip.text.x = element_text(size = 15))
+gg4<-ggplot(data = data_both[which(data_both$variable == "log_Turbidity"),], aes(factor(1), value, color = site)) +
+  geom_boxplot() +  facet_wrap(~variable,scales="free",ncol=3)+ 
+  scale_color_manual(values=c("#440154FF", "#277F8EFF", "#9FDA3AFF"))+
+  theme(axis.text.x=element_blank(),
+        axis.text.y= element_text(size = 11),
+        axis.title.x=element_blank(), 
+        axis.title.y = element_blank(),
+        legend.position= "none",
+        legend.title = element_blank(),
+        strip.text.x = element_text(size = 15))
+
+gridExtra::grid.arrange(gg, gg1, gg2,gg3,gg4, layout_matrix = rbind(c(1,2,3),c(1,4,5)), widths = c(1.2, 1, 1))
+
+
+
+```
+
+Box-plots are quite differents between sites. This is interesting to the model transferability.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+library(reshape2)
+data_plot_arik<-cbind(data_arik[,c(2,4,6,8)], log(data_arik$turbidity +1))
+colnames(data_plot_arik) <- c("Nitrate","Temperature","Spec. Cond.", "Oxygen C.", "log_Turbidity")
+data_plot_arik<-melt(data_plot_arik)
+data_plot_arik$site<-rep("Arikaree", length = length(data_plot_arik[,1]))
+
+data_cari1<-data_cari[7010:22848,]
+data_plot_cari<-cbind(data_cari1[,c(2,4,6,8)], log(data_cari1$turbidity +1))
+colnames(data_plot_cari) <- c("Nitrate", "Temperature","Spec. Cond.", "Oxygen C.", "log_Turbidity")
+data_plot_cari<-melt(data_plot_cari)
+data_plot_cari$site<-rep("Caribou", length = length(data_plot_cari[,1]))
+
+data_plot_king<-cbind(data_king[,c(2,4,6,8)], log(data_king$turbidity +1))
+colnames(data_plot_king) <- c("Nitrate", "Temperature","Spec. Cond.", "Oxygen C.", "log_Turbidity")
+data_plot_king<-melt(data_plot_king)
+data_plot_king$site<-rep("Kings Creek", length = length(data_plot_king[,1]))
+
+
+
+data_both<- rbind(data_plot_arik, data_plot_cari, data_plot_king)
+
+
+gg<-ggplot(data = data_both[which(data_both$variable == "Nitrate"),], aes(factor(1), value, color = site)) +
+  geom_boxplot() +  facet_wrap(~variable,scales="free",ncol=3)+ 
+  scale_color_manual(values=c("#440154FF", "#277F8EFF", "#9FDA3AFF"))+ylab("Nitrate (\U00B5mol/L)")+
+  theme(axis.text.x=element_blank(),
+        axis.text.y= element_text(size = 11),
+        legend.text=element_text(size=15),
+        axis.title.x=element_blank(), 
+        axis.title.y = element_text("Nitrate (micromol/L)"),
+        legend.position="bottom",
+        legend.direction="vertical",
+        legend.title = element_blank(),
+        strip.background = element_blank(),
+        strip.text.x = element_blank(),
+        plot.margin = unit(c(0.2,0.2,3.8,0.2),"cm"))
+
+gg1<-ggplot(data = data_both[which(data_both$variable == "Temperature"),], aes(factor(1), value, color = site)) +
+  geom_boxplot() +  facet_wrap(~variable,scales="free",ncol=3)+ 
+  scale_color_manual(values=c("#440154FF", "#277F8EFF", "#9FDA3AFF"))+ylab("Temperature (°C)") +
+  theme(axis.text.x=element_blank(),
+        axis.text.y= element_text(size = 11),
+        axis.title.x=element_blank(), 
+        axis.title.y = element_text("Temperature (°C)"),
+        legend.position= "none",
+        legend.title = element_blank(),
+        strip.background = element_blank(),
+        strip.text.x = element_blank())
+
+gg2<-ggplot(data = data_both[which(data_both$variable == "Spec. Cond."),], aes(factor(1), value, color = site)) +
+  geom_boxplot() +  facet_wrap(~variable,scales="free",ncol=3)+ 
+  scale_color_manual(values=c("#440154FF", "#277F8EFF", "#9FDA3AFF"))+ylab("Specific conductance (\U00B5S/cm)") +
+  theme(axis.text.x=element_blank(),
+        axis.text.y= element_text(size = 11),
+        axis.title.x=element_blank(), 
+        axis.title.y = element_text("Specific conductance (microS/cm"),
+        legend.position= "none",
+        legend.title = element_blank(),
+        strip.background = element_blank(),
+        strip.text.x = element_blank())
+
+gg3<-ggplot(data = data_both[which(data_both$variable == "Oxygen C."),], aes(factor(1), value, color = site)) +
+  geom_boxplot() +  facet_wrap(~variable,scales="free",ncol=3)+ 
+  scale_color_manual(values=c("#440154FF", "#277F8EFF", "#9FDA3AFF"))+ylab("Dissolved oxygen (mg/L)")+
+  theme(axis.text.x=element_blank(),
+        axis.text.y= element_text(size = 11),
+        axis.title.x=element_blank(), 
+        axis.title.y = element_text("Oxygen C. (mg/L)"),
+        legend.position= "none",
+        legend.title = element_blank(),
+        strip.background = element_blank(),
+        strip.text.x = element_blank())
+
+gg4<-ggplot(data = data_both[which(data_both$variable == "log_Turbidity"),], aes(factor(1), value, color = site)) +
+  geom_boxplot() +  facet_wrap(~variable,scales="free",ncol=3)+ 
+  scale_color_manual(values=c("#440154FF", "#277F8EFF", "#9FDA3AFF")) + ylab("Log-transformed turbidity (FNU)")+
+  theme(axis.text.x=element_blank(),
+        axis.text.y= element_text("log_Turbidity (FNU)"),
+        axis.title.x=element_blank(), 
+        axis.title.y = element_text(size = 11),
+        legend.position= "none",
+        legend.title = element_blank(),
+        strip.background = element_blank(),
+        strip.text.x = element_blank())
+
+gridExtra::grid.arrange(gg, gg1, gg2,gg3,gg4, layout_matrix = rbind(c(1,2,3),c(1,4,5)), widths = c(1, 1, 1))
+
+
+
+```
+
+## Time series 
+
+```{r}
+data<-data_cari[c(24185:24665),] #
+## Plot data
+data %>%
+  dplyr::select(start_date_time, nitrate_mean, turbidity, temp_mean, spec_cond, oxygen ) %>%
+  pivot_longer(-start_date_time, names_to = "variable") %>%
+  ggplot(aes(x = start_date_time , y = value, col = variable)) +
+  geom_point() +
+  facet_grid(rows = vars(variable),  scales = "free", space="free_x") +
+  labs(y = "", x = "") +
+  scale_x_datetime(date_labels ="%D") +
+  theme(legend.position = "none",
+        strip.text.x = element_text(size = 20))
+
+
+
+```
+
+```{r}
+
+data<-data_arik[c(52313:52793),] 
+## Plot data
+data %>%
+  dplyr::select(start_date_time, nitrate_mean, turbidity, temp_mean, spec_cond, oxygen ) %>%
+  pivot_longer(-start_date_time, names_to = "variable") %>%
+  ggplot(aes(x = start_date_time , y = value, col = variable)) +
+  geom_point() +
+  facet_grid(rows = vars(variable),  scales = "free", space="free_x") +
+  labs(y = "", x = "") +
+  scale_x_datetime(date_labels ="%D") +
+  theme(legend.position = "none",
+        strip.text.x = element_text(size = 20))
+
+
+
+```
+
+```{r}
+data<-data_king[c(36381:36861),] # 10 october dat at cari
+data<-data_king[c(22161:22641),]
+## Plot data
+data %>%
+  dplyr::select(start_date_time, nitrate_mean, turbidity, temp_mean, spec_cond, oxygen ) %>%
+  pivot_longer(-start_date_time, names_to = "variable") %>%
+  ggplot(aes(x = start_date_time , y = value, col = variable)) +
+  geom_point() +
+  facet_grid(rows = vars(variable),  scales = "free", space="free_x") +
+  labs(y = "", x = "") +
+  scale_x_datetime(date_labels ="%D") +
+  theme(legend.position = "none",
+        strip.text.x = element_text(size = 20))
+
+
+
+```
+
+1/ check multi-collinerity
+  - if some variables are multicollinear -> make several model with 1 multicolinear variable at each time
+  - if no collinearity .... 
+
+
+
+```{r message=FALSE, warning=FALSE}
+
+model_lm<-lm(nitrate_mean ~ temp_mean + spec_cond + oxygen +
+              log(turbidity+1) + time_recod, data = data_cari)
+
+caribouVIF<-car::vif(model_lm)
+
+model_lm<-lm(nitrate_mean ~ temp_mean + spec_cond + oxygen +
+              log(turbidity+1) + time_recod + elev, data = data_arik)
+
+arikVIF<-car::vif(model_lm)
+
+model_lm<-lm(nitrate_mean ~ temp_mean + spec_cond + oxygen +
+             log(turbidity+1) + time_recod, data = data_king)
+
+kingVIF<-car::vif(model_lm)
+
+round(cbind(caribouVIF,arikVIF,kingVIF),2)
+
+
+```
+
+There exist a multicollinearity problem at Caribou for oxygen concentration variable.
+
+
+# 1 - Caribou watershed data
+
+There are no data in winter as the river is frozen. For a first work, we choose to take only the data from 2019 spring to 2019 end.
+
+```{r}
+best_model_gam_cari<-mgcv::gam(nitrate_mean ~  s(spec_cond, k = 12) + s(oxygen, k = 12) + s(temp_mean, k = 12) + s(log(turbidity+1) ,  k = 12) + s(time_recod, k = 12), data = data_cari, na.action=na.exclude)
+
+#fill where we deleted na
+data_cari <- data_cari %>%
+  mutate(gam_res = residuals(best_model_gam_cari)) %>%
+  as_tsibble(index=start_date_time) %>%
+  fill_gaps()
+
+# data_cari %>% gg_tsdisplay(gam_res, plot_type='histogram')
+# Pacf(data_cari$gam_res)
+
+gam_prediction<-predict(best_model_gam_cari, data_cari)
+
+data_rmse<- cbind(data_cari$nitrate_mean,gam_prediction)
+data_rmse<-data_rmse[complete.cases(data_rmse),]
+rmse_cari<-Metrics::rmse(data_rmse[,1], data_rmse[,2])
+
+cari_res <- c(rmse_cari,best_model_gam_cari$gcv.ubre)
+```
+
+Without oxygen
+
+```{r}
+# for next plot
+best_model_gam_cari<-mgcv::gam(nitrate_mean ~  s(spec_cond, k = 12)  
+                            +  s(temp_mean, k = 12) +
+                            s(log(turbidity+1) ,  k = 12)+ s(time_recod, k = 12), data = data_cari)
+```
+
+```{r}
+pl<- getViz(best_model_gam_cari)
+p <- plot(pl) + l_points() + l_fitLine(linetype = 3) + 
+  l_ciLine(colour = 2) + theme_get() + labs(title = NULL)
+print(p, pages = 1)
+```
+
+
+With oxygen
+```{r}
+# for next plot
+best_model_gam_cari<-mgcv::gam(nitrate_mean ~  s(spec_cond, k = 12) + s(oxygen, k = 12) + 
+                            +  s(temp_mean, k = 12) +
+                            s(log(turbidity+1) ,  k = 12)+ s(time_recod, k = 12), data = data_cari)
+```
+
+```{r}
+pl<- getViz(best_model_gam_cari)
+p <- plot(pl) + l_points() + l_fitLine(linetype = 3) + 
+  l_ciLine(colour = 2) + theme_get() + labs(title = NULL)
+print(p, pages = 1)
+```
+
+
+There is no effect of oxygen multicollinearity on GAM estimates. 
+
+
+# ARIK
+
+```{r include=FALSE}
+best_model_gam_arik<-mgcv::gam(nitrate_mean ~  s(spec_cond, k = 12) + s(oxygen, k = 12) +  s(temp_mean, k = 12) + s(log(turbidity + 1 ),  k = 12)+ s(time_recod, k = 12) + s(elev, k = 12),  data = data_arik, na.action=na.exclude)
+
+#fill where we deleted na
+data_arik <- data_arik %>%
+  mutate(gam_res = residuals(best_model_gam_arik)) %>%
+  as_tsibble(index=start_date_time) %>%
+  fill_gaps()
+
+# data_arik %>% gg_tsdisplay(gam_res, plot_type='histogram')
+# Pacf(data_arik$gam_res)
+
+gam_prediction<-predict(best_model_gam_arik, data_arik)
+
+data_rmse <- cbind(data_arik$nitrate_mean,gam_prediction)
+data_rmse <- data_rmse[complete.cases(data_rmse),]
+rmse_arik <- Metrics::rmse(data_rmse[,1], data_rmse[,2])
+
+arik_res <- c(rmse_arik, best_model_gam_arik$gcv.ubre)
+```
+
+
+
+
+
+```{r}
+# for next plot
+best_model_gam_arik<-mgcv::gam(nitrate_mean ~  s(spec_cond, k = 12) + s(oxygen, k = 12) + 
+                            +  s(temp_mean, k = 12) +
+                            s(log(turbidity+1) ,  k = 12)+ s(time_recod, k = 12) + s(elev, k = 12), data = data_arik)
+```
+
+```{r}
+pl<- getViz(best_model_gam_arik)
+p <- plot(pl) + l_points() + l_fitLine(linetype = 3) + 
+  l_ciLine(colour = 2) + theme_get() + labs(title = NULL)
+print(p, pages = 1)
+```
+
+
+
+# KING
+
+```{r include=FALSE}
+best_model_gam_king<-mgcv::gam(nitrate_mean ~  s(spec_cond, k = 12) + s(oxygen, k = 12) +  s(temp_mean, k = 12) + s(log(turbidity + 1 ),  k = 12)+ s(time_recod, k = 12) + s(elev, k = 12), data = data_king, na.action=na.exclude)
+
+#fill where we deleted na
+data_king <- data_king %>%
+  mutate(gam_res = residuals(best_model_gam_king)) %>%
+  as_tsibble(index=start_date_time) %>%
+  fill_gaps()
+
+# data_king %>% gg_tsdisplay(gam_res, plot_type='histogram')
+# Pacf(data_king$gam_res)
+
+gam_prediction<-predict(best_model_gam_king, data_king)
+
+data_rmse<- cbind(data_king$nitrate_mean,gam_prediction)
+data_rmse<-data_rmse[complete.cases(data_rmse),]
+rmse_king<-Metrics::rmse(data_rmse[,1], data_rmse[,2])
+
+king_res <- c(rmse_king, best_model_gam_king$gcv.ubre)
+```
+
+
+
+```{r}
+# for next plot
+best_model_gam_king<-mgcv::gam(nitrate_mean ~  s(spec_cond, k = 12) + s(oxygen, k = 12) + s(temp_mean, k = 12) + s(log(turbidity+1),  k = 12)+ s(time_recod, k = 12)+ s(elev, k = 12), data = data_king)
+```
+
+```{r}
+pl<- getViz(best_model_gam_king)
+p <- plot(pl) + l_points() + l_fitLine(linetype = 3) + 
+  l_ciLine(colour = 2) + theme_get() + labs(title = NULL)
+print(p, pages = 1)
+```
+
+## TABLE RMSE and GCV
+
+```{r}
+res<-rbind(round(cari_res,2), round(arik_res,2), round(king_res,2))
+colnames(res)<- c("RMSE", "GCV")
+rownames(res)<- c("Caribou", "Arikaree", "King's Creek")
+print(res)
+```
+
+### Partial Correlation coefficients
+
+To account for confounding effects from the other predictors.
+
+CARIBOU : 
+```{r}
+df <- data_cari[, c("nitrate_mean","temp_mean", "spec_cond", "oxygen", "turbidity","time_recod")]
+df<-na.omit(df)
+pcorr = as.data.frame(corpcor::cor2pcor(cov(df)))
+names(pcorr) = names(df)
+rownames(pcorr) = names(df)
+pcorr = format(pcorr, digits=1)
+print.data.frame(pcorr)
+```
+Variables with a Pcov > 0.4 :
+ -Nitrate and time
+ -Oxygen and temperature
+
+
+ARIKAREE : 
+```{r}
+df <- data_arik[, c("nitrate_mean","temp_mean", "spec_cond", "oxygen", "turbidity","time_recod")]
+df<-na.omit(df)
+pcorr = as.data.frame(corpcor::cor2pcor(cov(df)))
+names(pcorr) = names(df)
+rownames(pcorr) = names(df)
+pcorr = format(pcorr, digits=1)
+print.data.frame(pcorr)
+```
+Variables with a Pcov > 0.4 :
+ -Nitrate and time
+ -Oxygen and temperature
+ -Oxygen and conductance
+ 
+KINGS : 
+```{r}
+df <- data_king[, c("nitrate_mean","temp_mean", "spec_cond", "oxygen", "turbidity","time_recod")]
+df<-na.omit(df)
+pcorr = as.data.frame(corpcor::cor2pcor(cov(df)))
+names(pcorr) = names(df)
+rownames(pcorr) = names(df)
+pcorr = format(pcorr, digits=1)
+print.data.frame(pcorr)
+```
+Variables with a Pcov > 0.4 :
+ -Nitrate and conductance
+ -Oxygen and conductance
+
+
+### Calculating importance of variables
+```{r eval=FALSE, include=FALSE}
+library(vimp)
+vim(best_model_gam_cari)
+
+df<- data_cari[, c("nitrate_mean","temp_mean", "spec_cond", "oxygen", "turbidity","time_recod")]
+df<-na.omit(df)
+X <- df$nitrate_mean
+Y <- df[, c("temp_mean", "spec_cond", "oxygen", "turbidity","time_recod")]
+
+
+df<- data_arik[, c("nitrate_mean","temp_mean", "spec_cond", "oxygen", "turbidity","time_recod")]
+df<-na.omit(df)
+df$folds <- sample(rep(seq_len(2), length = dim(df)[1]))
+df<-df[-1,]
+
+best_model_gam_arik<-mgcv::gam(nitrate_mean ~  s(spec_cond, k = 12) + s(oxygen, k = 12) +  s(temp_mean, k = 12) + s(log(turbidity + 1 ),  k = 12)+ s(time_recod, k = 12), data = subset(df, df$folds == 1))
+
+
+best_model_gam_arik<-lm(nitrate_mean ~  spec_cond + oxygen+  temp_mean + log(turbidity + 1 )+ time_recod, data = subset(df, df$folds == 1))
+
+full_mod <- best_model_gam_arik
+full_fit <- predict(full_mod)
+
+X <- as.matrix(df[, -dim(df)[2]])[df$folds == 2, ]
+
+red_mod_cond <- gam(full_fit ~  X[,-3])
+red_fit_cond <- predict(red_mod_cond)
+
+vim_cond <- vim(Y = df$nitrate_mean, f1 = full_fit, f2 = red_fit_cond, indx = 1, run_regression = FALSE, type = "r_squared", folds = df$folds)
+
+
+
+create.SL.glmnet <- function(alpha = c(0.25, 0.5, 0.75)) {
+  for (mm in seq(length(alpha))) {
+    eval(parse(file = "", text = paste('SL.glmnet.', alpha[mm], '<- function(..., alpha = ', alpha[mm], ') SL.glmnet(..., alpha = alpha)', sep = '')), envir = .GlobalEnv)
+  }
+  invisible(TRUE)
+}
+create.SL.glmnet()
+
+
+vim_cond <- vimp_rsquared(Y = df$nitrate_mean, X = df[-1], indx = 3, run_regression = TRUE,  V = 3)
+
+
+
+
+
+
+
+```
+
+
+```{r eval=FALSE, include=FALSE}
+## fit full and reduced models...
+  b <- gam(nitrate_mean ~  s(spec_cond, k = 12) + s(oxygen, k = 12) + s(temp_mean, k = 12) + s(log(turbidity+1) ,  k = 12) + s(time_recod, k = 12), data = data_king)
+  
+  b1 <- gam(nitrate_mean ~   s(oxygen, k = 12) + s(temp_mean, k = 12) + s(log(turbidity+1) ,  k = 12)+ s(time_recod, k = 12), data = data_king, sp=b$sp[2:5])
+  
+  b2 <- gam(nitrate_mean ~  s(spec_cond, k = 12) + 
+              s(temp_mean, k = 12) + s(log(turbidity+1) ,  k = 12)+ s(time_recod, k = 12), data = data_king , sp=b$sp[c(1,3:5)])
+  
+  b3 <- gam(nitrate_mean ~  s(spec_cond, k = 12) + s(oxygen, k = 12) +  s(log(turbidity+1) ,  k = 12)+ s(time_recod, k = 12), data = data_king, sp=b$sp[c(1:2,4:5)])
+  
+  b4 <- gam(nitrate_mean ~  s(spec_cond, k = 12) + s(oxygen, k = 12) + s(temp_mean, k = 12)+ s(time_recod, k = 12) , data = data_king, sp=b$sp[c(1:3,5)])
+  
+  b5 <- gam(nitrate_mean ~  s(spec_cond, k = 12) + s(oxygen, k = 12) + s(temp_mean, k = 12) + s(log(turbidity+1) ,  k = 12), data = data_king , sp=b$sp[c(1:4)])
+  
+  b0 <- gam(nitrate_mean~1, data = data_king)
+  
+dev_king = data.frame("Total" = summary(b)$dev.exp, "Spec.Cond" = (summary(b)$dev.exp-summary(b1)$dev.exp)/summary(b)$dev.exp, 
+           "Oxygen" = (summary(b)$dev.exp-summary(b2)$dev.exp)/summary(b)$dev.exp, 
+           "Temperature" = (summary(b)$dev.exp-summary(b3)$dev.exp)/summary(b)$dev.exp, 
+           "Turbidity" = (summary(b)$dev.exp-summary(b4)$dev.exp)/summary(b)$dev.exp, 
+           "Time" = (summary(b)$dev.exp-summary(b5)$dev.exp)/summary(b)$dev.exp)  
+
+ 
+
+ b <- gam(nitrate_mean ~  s(spec_cond, k = 12) + s(oxygen, k = 12) + s(temp_mean, k = 12) + s(log(turbidity+1) ,  k = 12) + s(time_recod, k = 12), data = data_cari)
+  
+  b1 <- gam(nitrate_mean ~   s(oxygen, k = 12) + s(temp_mean, k = 12) + s(log(turbidity+1) ,  k = 12)+ s(time_recod, k = 12), data = data_cari, sp=b$sp[2:5])
+  
+  b2 <- gam(nitrate_mean ~  s(spec_cond, k = 12) + 
+              s(temp_mean, k = 12) + s(log(turbidity+1) ,  k = 12)+ s(time_recod, k = 12), data = data_cari , sp=b$sp[c(1,3:5)])
+  
+  b3 <- gam(nitrate_mean ~  s(spec_cond, k = 12) + s(oxygen, k = 12) +  s(log(turbidity+1) ,  k = 12)+ s(time_recod, k = 12), data = data_cari, sp=b$sp[c(1:2,4:5)])
+  
+  b4 <- gam(nitrate_mean ~  s(spec_cond, k = 12) + s(oxygen, k = 12) + s(temp_mean, k = 12)+ s(time_recod, k = 12) , data = data_cari, sp=b$sp[c(1:3,5)])
+  
+  b5 <- gam(nitrate_mean ~  s(spec_cond, k = 12) + s(oxygen, k = 12) + s(temp_mean, k = 12) + s(log(turbidity+1) ,  k = 12), data = data_cari , sp=b$sp[c(1:4)])
+  
+  b0 <- gam(nitrate_mean~1, data = data_cari)
+  
+dev_cari = data.frame("Total" = summary(b)$dev.exp, "Spec.Cond" = (summary(b)$dev.exp-summary(b1)$dev.exp)/summary(b)$dev.exp, 
+           "Oxygen" = (summary(b)$dev.exp-summary(b2)$dev.exp)/summary(b)$dev.exp, 
+           "Temperature" = (summary(b)$dev.exp-summary(b3)$dev.exp)/summary(b)$dev.exp, 
+           "Turbidity" = (summary(b)$dev.exp-summary(b4)$dev.exp)/summary(b)$dev.exp, 
+           "Time" = (summary(b)$dev.exp-summary(b5)$dev.exp)/summary(b)$dev.exp)  
+
+ 
+
+ b <- gam(nitrate_mean ~  s(spec_cond, k = 12) + s(oxygen, k = 12) + s(temp_mean, k = 12) + s(log(turbidity+1) ,  k = 12) + s(time_recod, k = 12), data = data_arik)
+  
+  b1 <- gam(nitrate_mean ~   s(oxygen, k = 12) + s(temp_mean, k = 12) + s(log(turbidity+1) ,  k = 12)+ s(time_recod, k = 12), data = data_arik, sp=b$sp[2:5])
+  
+  b2 <- gam(nitrate_mean ~  s(spec_cond, k = 12) + 
+              s(temp_mean, k = 12) + s(log(turbidity+1) ,  k = 12)+ s(time_recod, k = 12), data = data_arik , sp=b$sp[c(1,3:5)])
+  
+  b3 <- gam(nitrate_mean ~  s(spec_cond, k = 12) + s(oxygen, k = 12) +  s(log(turbidity+1) ,  k = 12)+ s(time_recod, k = 12), data = data_arik, sp=b$sp[c(1:2,4:5)])
+  
+  b4 <- gam(nitrate_mean ~  s(spec_cond, k = 12) + s(oxygen, k = 12) + s(temp_mean, k = 12)+ s(time_recod, k = 12) , data = data_arik, sp=b$sp[c(1:3,5)])
+  
+  b5 <- gam(nitrate_mean ~  s(spec_cond, k = 12) + s(oxygen, k = 12) + s(temp_mean, k = 12) + s(log(turbidity+1) ,  k = 12), data = data_arik , sp=b$sp[c(1:4)])
+  
+  b0 <- gam(nitrate_mean~1, data = data_arik)
+  
+dev_arik = data.frame("Total" = summary(b)$dev.exp, "Spec.Cond" = (summary(b)$dev.exp-summary(b1)$dev.exp)/summary(b)$dev.exp, 
+           "Oxygen" = (summary(b)$dev.exp-summary(b2)$dev.exp)/summary(b)$dev.exp, 
+           "Temperature" = (summary(b)$dev.exp-summary(b3)$dev.exp)/summary(b)$dev.exp, 
+           "Turbidity" = (summary(b)$dev.exp-summary(b4)$dev.exp)/summary(b)$dev.exp, 
+           "Time" = (summary(b)$dev.exp-summary(b5)$dev.exp)/summary(b)$dev.exp)  
+
+tab <- as.matrix(rbind(dev_cari, dev_arik, dev_king))
+rownames(tab)= c("Caribou", "Arikaree", "King's Creek")
+tab<-t(tab)
+
+library(plot.matrix)
+par(mar=c(5.1, 6.5, 5.1, 4.1))
+plot(tab , las = 1, ylab ="", xlab = "", main = "", breaks=c(-0.2,0,0.05,0.1,0.2, 0.5, 1), 
+     axis.col=list(side=3, cex.axis=1.5), axis.row=list(cex.axis=1.2),
+     digits=3, text.cell=list(cex=1.5), key=NULL)
+     
+```
+
+
+
+
+
+```{r}
+summary(gam(nitrate_mean ~  s(spec_cond, k = 12) , data = data_arik , sp=b$sp[1]))$dev.exp
+summary(gam(nitrate_mean ~  s(oxygen, k = 12) , data = data_arik , sp=b$sp[2]))$dev.exp
+summary(gam(nitrate_mean ~  s(temp_mean, k = 12) , data = data_arik , sp=b$sp[3]))$dev.exp
+summary(gam(nitrate_mean ~  s(log(turbidity+1), k = 12) , data = data_arik , sp=b$sp[4]))$dev.exp
+summary(gam(nitrate_mean ~  s(time_recod, k = 12) , data = data_arik , sp=b$sp[5]))$dev.exp
+
+```
+
+
+```{r}
+c <- getViz(best_model_gam_cari)
+a <- getViz(best_model_gam_arik)
+k <- getViz(best_model_gam_king)
+
+cari1 <- plot(sm(c, 1)) + l_fitLine(colour = "red") + l_ciLine(mul = 5, colour = "blue", linetype = 2) +  xlab("Spec. Cond.") + ylab("s(x)")  +
+    theme_classic()
+
+arik1 <- plot(sm(a, 1)) + l_fitLine(colour = "red") + l_ciLine(mul = 5, colour = "blue", linetype = 2) + xlab("Spec. Cond.") + ylab("")  +
+    theme_classic()
+
+king1 <- plot(sm(k, 1)) + l_fitLine(colour = "red") +l_ciLine(mul = 5, colour = "blue", linetype = 2) + xlab("Spec. Cond.") + ylab("") +
+     theme_classic()
+
+cari2 <- plot(sm(c, 2)) + l_fitLine(colour = "red") + l_ciLine(mul = 5, colour = "blue", linetype = 2) + xlab("Oxygen") +ylab("s(x)") +
+     theme_classic()
+
+arik2 <- plot(sm(a, 2)) + l_fitLine(colour = "red") + l_ciLine(mul = 5, colour = "blue", linetype = 2) + xlab("Oxygen") +ylab("") + ylim(-5,5) + theme_classic()
+
+king2 <- plot(sm(k, 2)) + l_fitLine(colour = "red") + l_ciLine(mul = 5, colour = "blue", linetype = 2) +  xlab("Oxygen") +ylab("") +
+    theme_classic()
+
+cari3 <- plot(sm(c, 3)) + l_fitLine(colour = "red") + l_ciLine(mul = 5, colour = "blue", linetype = 2) +  xlab("Temperature") +ylab("s(x)") +
+    theme_classic()
+
+arik3 <- plot(sm(a, 3)) + l_fitLine(colour = "red") +  l_ciLine(mul = 5, colour = "blue", linetype = 2) +  xlab("Temperature") +ylab("")+ ylim(-5,5) + 
+    theme_classic()
+
+king3 <- plot(sm(k, 3)) + l_fitLine(colour = "red") + l_ciLine(mul = 5, colour = "blue", linetype = 2) + xlab("Temperature") +ylab("") +
+     theme_classic()
+
+cari4 <- plot(sm(c, 4)) + l_fitLine(colour = "red") +  l_ciLine(mul = 5, colour = "blue", linetype = 2) + xlab("log(Turbidity)") + ylab("s(x)") +
+     theme_classic()
+
+arik4 <- plot(sm(a, 4)) + l_fitLine(colour = "red") + l_ciLine(mul = 5, colour = "blue", linetype = 2) + xlab("log(Turbidity)") + ylab("") +
+     theme_classic()
+
+king4 <- plot(sm(k, 4)) + l_fitLine(colour = "red") +l_ciLine(mul = 5, colour = "blue", linetype = 2) + xlab("log(Turbidity)") + ylab("") +
+    theme_classic()
+
+cari5 <- plot(sm(c, 5)) + l_fitLine(colour = "red") +  l_ciLine(mul = 5, colour = "blue", linetype = 2) + xlab("Time") + ylab("s(x)") +
+     theme_classic()
+
+arik5 <- plot(sm(a, 5)) + l_fitLine(colour = "red") +  l_ciLine(mul = 5, colour = "blue", linetype = 2) + xlab("Time") + ylab("") +
+     theme_classic()
+
+king5 <- plot(sm(k, 5)) + l_fitLine(colour = "red") +  l_ciLine(mul = 5, colour = "blue", linetype = 2) + xlab("Time") + ylab("") +
+    theme_classic()
+
+    gridPrint(cari1, arik1, king1, cari2, arik2, king2 ,cari3, arik3, king3,cari4, arik4, king4, cari5, arik5, king5, ncol = 3)
+
+```
+
+
+
+
+
+# with the time as covariate 
+
+
+```{r include=FALSE}
+data_cari$temp_recod <- seq(from = 1, to = nrow(data_cari))
+data4model<-data_cari[7010:22300,]
+data_train<- data4model[1:10000,]
+data_predict<- data4model[10001:15291,]
+
+best_model_gam_cari<-mgcv::gam(nitrate_mean ~  s(spec_cond, k = 12) + s(oxygen, k = 12) +  s(temp_recod, k = 12) +
+                            +  s(temp_mean, k = 12) +
+                            s(log(turbidity+1) ,  k = 12), data = data_train)
+
+
+data_arik$temp_recod <- seq(from = 1, to = nrow(data_arik))
+data4model<- data_arik
+data_train<- data4model[1:25000,]
+data_predict<- data4model[25001:35040,]
+
+best_model_gam_arik<-mgcv::gam(nitrate_mean ~  s(spec_cond, k = 12) + s(oxygen, k = 12) + s(temp_recod, k = 12) + 
+                            s(temp_mean, k = 12) + s(log(turbidity + 1 ),  k = 12),  data = data_train)
+
+#split data into training dataset and predict dataset
+data_king$temp_recod <- seq(from = 1, to = nrow(data_king))
+data4model<-data_king
+data_train<- data4model[1:25000,]
+data_predict<- data4model[25001:35040,]
+
+
+best_model_gam_king<-mgcv::gam(nitrate_mean ~  s(spec_cond, k = 12) + s(oxygen, k = 12) +  s(temp_recod, k = 12) + 
+                            s(temp_mean, k = 12) + s(log(turbidity + 1 ),  k = 12), data = data_train)
+
+```
+
+
+```{r}
+c <- getViz(best_model_gam_cari)
+a <- getViz(best_model_gam_arik)
+k <- getViz(best_model_gam_king)
+
+cari1 <- plot(sm(c, 1)) + l_fitLine(colour = "red") + l_rug(mapping = aes(x=x, y=y), alpha = 0.8) +
+    l_ciLine(mul = 5, colour = "blue", linetype = 2) + xlab("") + ylab("s(x)") +
+    theme_classic()
+
+arik1 <- plot(sm(a, 1)) + l_fitLine(colour = "red") + l_rug(mapping = aes(x=x, y=y), alpha = 0.8) +
+    l_ciLine(mul = 5, colour = "blue", linetype = 2) + xlab("") +ylab("s(x)") +
+    theme_classic()
+
+king1 <- plot(sm(k, 1)) + l_fitLine(colour = "red") + l_rug(mapping = aes(x=x, y=y), alpha = 0.8) +
+    l_ciLine(mul = 5, colour = "blue", linetype = 2) + xlab("Spec. Cond.") +ylab("s(x)") +
+     theme_classic()
+
+cari2 <- plot(sm(c, 2)) + l_fitLine(colour = "red") + l_rug(mapping = aes(x=x, y=y), alpha = 0.8) +
+    l_ciLine(mul = 5, colour = "blue", linetype = 2) + xlab("") +ylab("") + ylim(-10, 10) +
+     theme_classic()
+
+arik2 <- plot(sm(a, 2)) + l_fitLine(colour = "red") + l_rug(mapping = aes(x=x, y=y), alpha = 0.8) +
+    l_ciLine(mul = 5, colour = "blue", linetype = 2) + xlab("") +ylab("") + ylim(-10, 10) +
+     theme_classic()
+
+king2 <- plot(sm(k, 2)) + l_fitLine(colour = "red") + l_rug(mapping = aes(x=x, y=y), alpha = 0.8) +
+    l_ciLine(mul = 5, colour = "blue", linetype = 2) +  xlab("Oxygen") +ylab("") + ylim(-10, 10) +
+    theme_classic()
+
+cari3 <- plot(sm(c, 3)) + l_fitLine(colour = "red") + l_rug(mapping = aes(x=x, y=y), alpha = 0.8) +
+    l_ciLine(mul = 5, colour = "blue", linetype = 2) + xlab("") +ylab("") + 
+    theme_classic()
+
+arik3 <- plot(sm(a, 3)) + l_fitLine(colour = "red") + l_rug(mapping = aes(x=x, y=y), alpha = 0.8) +
+    l_ciLine(mul = 5, colour = "blue", linetype = 2) + xlab("") +ylab("") + ylim(-10, 10) +
+    theme_classic()
+
+king3 <- plot(sm(k, 3)) + l_fitLine(colour = "red") + l_rug(mapping = aes(x=x, y=y), alpha = 0.8) +
+    l_ciLine(mul = 5, colour = "blue", linetype = 2) + xlab("Temps") +ylab("") + ylim(-10, 10) +
+     theme_classic()
+
+cari4 <- plot(sm(c, 4)) + l_fitLine(colour = "red") + l_rug(mapping = aes(x=x, y=y), alpha = 0.8) +
+    l_ciLine(mul = 5, colour = "blue", linetype = 2) + xlab("") +ylab("") + ylim(-10, 10) +
+     theme_classic()
+
+arik4 <- plot(sm(a, 4)) + l_fitLine(colour = "red") + l_rug(mapping = aes(x=x, y=y), alpha = 0.8) +
+    l_ciLine(mul = 5, colour = "blue", linetype = 2) + xlab("") + ylab("") + ylim(-10, 10) +
+     theme_classic()
+
+king4 <- plot(sm(k, 4)) + l_fitLine(colour = "red") + l_rug(mapping = aes(x=x, y=y), alpha = 0.8) +
+    l_ciLine(mul = 5, colour = "blue", linetype = 2) + xlab("temperature") + ylab("") + ylim(-10, 10) +
+    theme_classic()
+
+
+gridPrint(cari1, cari2, cari3,cari4, arik1,arik2, arik3, arik4, king1, king2 , king3, king4, ncol = 4)
+
+```
+
+
+```{r}
+unloadNamespace("mgcViz")
+unloadNamespace("qgam")
+unloadNamespace("gamm4")
+unloadNamespace("mgcv")
+library("vimp")
+library("SuperLearner")
+library("gam")
+
+sl_gam<-create.Learner("SL.gam", params =list(deg.gam = 12))
+  
+  dfk <- data_king[, c("nitrate_mean","temp_mean", "spec_cond", "oxygen", "turbidity","time_recod")]
+  dfk$log_turbidity <- log(dfk$turbidity +1)
+  dfk <- dfk[, c("nitrate_mean","temp_mean", "spec_cond", "oxygen", "log_turbidity","time_recod")]
+  dfk<-na.omit(dfk)
+  ## estimate variable importance with learner gam
+  imp_gam_tempk <- vimp_rsquared(Y = dfk$nitrate_mean, X = dfk[,-1],
+      indx = 1, run_regression = TRUE, SL.library = "SL.gam_1")
+  imp_gam_condk <- vimp_rsquared(Y = dfk$nitrate_mean, X = dfk[,-1],
+      indx = 2, run_regression = TRUE, SL.library = "SL.gam_1")
+  imp_gam_oxygenk <- vimp_rsquared(Y = dfk$nitrate_mean, X = dfk[,-1],
+      indx = 3, run_regression = TRUE, SL.library = "SL.gam_1" )
+  imp_gam_turbidityk <- vimp_rsquared(Y = dfk$nitrate_mean, X = dfk[,-1],
+      indx = 4, run_regression = TRUE, SL.library = "SL.gam_1")
+  imp_gam_timek <- vimp_rsquared(Y = dfk$nitrate_mean, X = dfk[,-1],
+      indx = 5, run_regression = TRUE, SL.library = "SL.gam_1")
+  imp_gam_totalk <- vimp_rsquared(Y = dfk$nitrate_mean, X = dfk[,-1],
+      indx = c(1:5), run_regression = TRUE, SL.library = "SL.gam_1")
+  sum(imp_gam_tempk$est, imp_gam_condk$est, imp_gam_oxygenk$est, imp_gam_turbidityk$est, imp_gam_timek$est)
+
+dfa <- data_arik[, c("nitrate_mean","temp_mean", "spec_cond", "oxygen", "turbidity","time_recod")]
+dfa$log_turbidity <- log(dfa$turbidity +1)
+dfa <- dfa[, c("nitrate_mean","temp_mean", "spec_cond", "oxygen", "log_turbidity","time_recod")]
+dfa<-na.omit(dfa)
+## estimate variable importance with learner gam
+imp_gam_tempa <- vimp_rsquared(Y = dfa$nitrate_mean, X = dfa[,-1],
+    indx = 1, run_regression = TRUE, SL.library = "SL.gam_1")
+imp_gam_conda <- vimp_rsquared(Y = dfa$nitrate_mean, X = dfa[,-1],
+    indx = 2, run_regression = TRUE, SL.library = "SL.gam_1")
+imp_gam_oxygena <- vimp_rsquared(Y = dfa$nitrate_mean, X = dfa[,-1],
+    indx = 3, run_regression = TRUE, SL.library = "SL.gam_1" )
+imp_gam_turbiditya <- vimp_rsquared(Y = dfa$nitrate_mean, X = dfa[,-1],
+    indx = 4, run_regression = TRUE, SL.library = "SL.gam_1")
+imp_gam_timea <- vimp_rsquared(Y = dfa$nitrate_mean, X = dfa[,-1],
+    indx = 5, run_regression = TRUE, SL.library = "SL.gam_1")
+
+imp_gam_totala <- vimp_rsquared(Y = dfa$nitrate_mean, X = dfa[,-1],
+    indx = c(1:5), run_regression = TRUE, SL.library = "SL.gam_1")
+
+sum(imp_gam_tempa$est, imp_gam_conda$est, imp_gam_oxygena$est, imp_gam_turbiditya$est, imp_gam_timea$est)
+
+dfc <- data_cari[, c("nitrate_mean","temp_mean", "spec_cond", "oxygen", "turbidity","time_recod")]
+dfc$log_turbidity <- log(dfc$turbidity +1)
+dfc <- dfc[, c("nitrate_mean","temp_mean", "spec_cond", "oxygen", "log_turbidity","time_recod")]
+dfc<-na.omit(dfc)
+## estimate variable importance with learner gam
+imp_gam_tempc <- vimp_rsquared(Y = dfc$nitrate_mean, X = dfc[,-1],
+    indx = 1, run_regression = TRUE, SL.library = "SL.gam_1")
+imp_gam_condc <- vimp_rsquared(Y = dfc$nitrate_mean, X = dfc[,-1],
+    indx = 2, run_regression = TRUE, SL.library = "SL.gam_1")
+imp_gam_oxygenc <- vimp_rsquared(Y = dfc$nitrate_mean, X = dfc[,-1],
+    indx = 3, run_regression = TRUE, SL.library = "SL.gam_1" )
+imp_gam_turbidityc <- vimp_rsquared(Y = dfc$nitrate_mean, X = dfc[,-1],
+    indx = 4, run_regression = TRUE, SL.library = "SL.gam_1")
+imp_gam_timec <- vimp_rsquared(Y = dfc$nitrate_mean, X = dfc[,-1],
+    indx = 5, run_regression = TRUE, SL.library = "SL.gam_1")
+
+imp_gam_totalc <- vimp_rsquared(Y = dfc$nitrate_mean, X = dfc[,-1],
+    indx = c(1:5), run_regression = TRUE, SL.library = "SL.gam_1")
+
+sum(imp_gam_tempc$est, imp_gam_condc$est, imp_gam_oxygenc$est, imp_gam_turbidityc$est, imp_gam_timec$est)
+
+
+
+
+```
+
+```{r}
+library("forcats")
+## combine the objects together
+estsk <- merge_vim(imp_gam_tempk, imp_gam_condk, imp_gam_oxygenk, imp_gam_turbidityk, imp_gam_timek)
+estsc <- merge_vim(imp_gam_tempc, imp_gam_condc, imp_gam_oxygenc, imp_gam_turbidityc, imp_gam_timec)
+estsa <- merge_vim(imp_gam_tempa, imp_gam_conda, imp_gam_oxygena, imp_gam_turbiditya, imp_gam_timea)
+
+get_nm <- function(s) {
+  if (s == 1) {
+    return("Temperature")
+  } else if (s == 2) {
+    return("Spec.Cond")
+  } else if (s == 3) {
+    return("Dissolved Oxygen")
+  } else if (s == 4) {
+    return("log(Turbidity)")
+  } else if (s == 5) {
+    return("Time")
+  } 
+}
+get_nms <- function(ests) {
+  return(apply(matrix(as.numeric(ests$s)), 1, get_nm))
+}
+
+## plot king
+plot_k<-estsk$mat %>%
+  arrange(desc(est)) %>%
+  mutate(ord_group = forcats::fct_reorder(get_nms(estsk$mat), est)) %>%
+  ggplot(aes(x = est, y = ord_group)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = cil, xmax = ciu)) +
+  xlab(expression(paste("KING  : Variable importance estimates: non-parametric", R^2, sep = "")))+
+  ylab("") +
+  ggtitle("var imp estimated with SL.gam (deg.gam = 12)")
+
+## plot cari
+plot_c<-estsc$mat %>%
+  arrange(desc(est)) %>%
+  mutate(ord_group = forcats::fct_reorder(get_nms(estsc$mat), est)) %>%
+  ggplot(aes(x = est, y = ord_group)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = cil, xmax = ciu)) +
+  xlab(expression(paste("CARI  : Variable importance estimates: non-parametric", R^2, sep = "")))+
+  ylab("") +
+  ggtitle("var imp estimated with SL.gam (deg.gam = 12)")
+
+## plot arik
+plot_a<-estsa$mat %>%
+  arrange(desc(est)) %>%
+  mutate(ord_group = forcats::fct_reorder(get_nms(estsa$mat), est)) %>%
+  ggplot(aes(x = est, y = ord_group)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = cil, xmax = ciu)) +
+  xlab(expression(paste("ARIK  : Variable importance estimates: non-parametric", R^2, sep = "")))+
+  ylab("") +
+  ggtitle("var imp estimated with SL.gam (deg.gam = 12)")
+
+gridExtra::grid.arrange(plot_c, plot_a, plot_k, layout_matrix = rbind(c(1,1,1),c(2,2,2),c(3,3,3)), widths = c(1, 1, 1))
+```
+
+```{r}
+estsk <- merge_vim(imp_gam_tempk, imp_gam_condk, imp_gam_oxygenk, imp_gam_turbidityk, imp_gam_timek)
+estsc <- merge_vim(imp_gam_tempc, imp_gam_condc, imp_gam_oxygenc, imp_gam_turbidityc, imp_gam_timec)
+estsa <- merge_vim(imp_gam_tempa, imp_gam_conda, imp_gam_oxygena, imp_gam_turbiditya, imp_gam_timea)
+
+
+arik_imp<-estsa$mat
+arik_imp$Site <- "Arikaree"
+cari_imp<-estsc$mat
+cari_imp$Site <- "Caribou"
+king_imp<-estsk$mat
+king_imp$Site <- "Kings creek"
+
+total_imp<-rbind(cari_imp,arik_imp,king_imp)
+
+total_imp %>%
+  mutate(ord_group = get_nms(total_imp)) %>%
+  ggplot(aes(x = est, y = ord_group, color = Site)) +
+  geom_point(position = position_dodge(0.5)) +
+  geom_errorbarh(aes(xmin = cil, xmax = ciu),position = position_dodge(0.5)) +
+  xlab(expression(paste("Non-parametric ", R^2, sep = "")))+
+  ylab("") +
+  ggtitle("")+ 
+  scale_color_manual(values=c("#440154FF", "#277F8EFF", "#9FDA3AFF"))+
+  theme(legend.text = element_text(size = 15 ),
+        legend.title = element_blank(),
+        legend.position = c(0.8, 0.2),
+        axis.text.x = element_text(size=14),
+        axis.text.y = element_text(size=14),
+        axis.title.x = element_text(size=14))
+```
+
+```{r}
+estsk <- merge_vim(imp_gam_tempk, imp_gam_condk, imp_gam_oxygenk, imp_gam_turbidityk, imp_gam_timek)
+estsc <- merge_vim(imp_gam_tempc, imp_gam_condc, imp_gam_oxygenc, imp_gam_turbidityc, imp_gam_timec)
+percent_of_varc<-(estsc$mat[2:5]/imp_gam_totalc$est)*100
+estsa <- merge_vim(imp_gam_tempa, imp_gam_conda, imp_gam_oxygena, imp_gam_turbiditya, imp_gam_timea)
+
+
+arik_imp<-cbind(estsa$mat[1],(estsa$mat[2:5]/imp_gam_totala$est)*100)
+arik_imp$Site <- "Arikaree"
+cari_imp<-cbind(estsc$mat[1],(estsc$mat[2:5]/imp_gam_totalc$est)*100)
+cari_imp$Site <- "Caribou"
+king_imp<-cbind(estsk$mat[1],(estsk$mat[2:5]/imp_gam_totalk$est)*100)
+king_imp$Site <- "King's creek"
+
+total_imp<-rbind(cari_imp,arik_imp,king_imp)
+
+total_imp %>%
+  mutate(ord_group = get_nms(total_imp)) %>%
+  ggplot(aes(x = est, y = ord_group, color = Site)) +
+  geom_point(position = position_dodge(0.5)) +
+  geom_errorbarh(aes(xmin = cil, xmax = ciu),position = position_dodge(0.5)) +
+  xlab(expression(paste("Variable importance (%)")))+
+  ylab("") +
+  ggtitle("")+ 
+  scale_color_manual(values=c("#999999", "#E69F00", "#56B4E9"))+
+  theme(legend.text = element_text(size = 14 ),
+        legend.title = element_blank(),
+        legend.position = c(0.8, 0.4),
+        axis.text.x = element_text(size=14),
+        axis.text.y = element_text(size=14),
+        axis.title.x = element_text(size=14))
+```
