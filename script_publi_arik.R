@@ -65,6 +65,7 @@ waq_cols_sel <- c("startDateTime","horizontalPosition",  "specificConductance","
                   "turbidityFinalQF","fDOM","fDOMFinalQFSciRvw")
 # The dimension of the bases used to represent the smooth term. See ?mgcv::s()
 smoothDimK <- 12
+stepGam <- FALSE # Boolean, perform step-wise check on best GAM? Helps decide smoothDimK
 # Define the time range to apply the model
 modelTimeRange <- base::data.frame(site = c("ARIK","CARI","LEWI"),
                                    startDate = as.POSIXct(c("2018-09-01","2018-06-01","2018-01-01"),tz="GMT"),
@@ -209,47 +210,48 @@ for(site in neon_sites){
   nitrate_site <- nsw$NSW_15_minute %>% subset(siteID==site) %>%
     as_tibble() %>%
     janitor::clean_names() %>%
-    # mutate( start_date_time = lubridate::ymd_hms(start_date_time) - second(start_date_time)) %>%
+    mutate( start_date_time = lubridate::ymd_hms(start_date_time) - second(start_date_time)) %>%
     select(c(start_date_time, surf_water_nitrate_mean, final_qf)) %>%
     rename(
       nitrate_mean = surf_water_nitrate_mean,
-      label_nitrate_mean = final_qf
-    ) %>% padr::thicken(interval = '15 min') %>% # rounding ensures 15 minute intervals
-    group_by(start_date_time_15_min) %>% 
-    summarise(nitrate_mean = mean(nitrate_mean,na.rm=TRUE), label_nitrate_mean = max(label_nitrate_mean,na.rm = TRUE)) %>% 
-    rename(start_date_time = start_date_time_15_min)
+      label_nitrate_mean = final_qf) #%>% 
+    # padr::thicken(interval = '15 min') %>% # rounding ensures 15 minute intervals
+    # group_by(start_date_time_15_min) %>% 
+    # summarise(nitrate_mean = mean(nitrate_mean,na.rm=TRUE), label_nitrate_mean = max(label_nitrate_mean,na.rm = TRUE)) %>% 
+    # rename(start_date_time = start_date_time_15_min)
   
   
   # Extract temperature at 15 minute intervals for site of interest
-  temp_site <- temp_all$TSW_5min %>% subset(siteID==site) %>%
+  temp_site <- temp_all$TSW_5min %>% 
+    subset(siteID==site) %>%
     as_tibble() %>%
     janitor::clean_names()  %>%
     # filter(horizontal_position == "101") %>%
     filter(horizontal_position == "102") %>%
-    # mutate(start_date_time = ymd_hms(start_date_time) - second(start_date_time)) %>%
+    mutate(start_date_time = ymd_hms(start_date_time) - second(start_date_time)) %>%
     select(c(start_date_time, surf_water_temp_mean, final_qf)) %>%
     rename(
       temp_mean = surf_water_temp_mean,
-      label_temp_mean = final_qf
-    ) %>% padr::thicken(interval = '15 min') %>% 
-    group_by(start_date_time_15_min) %>% 
-    summarise(temp_mean = mean(temp_mean,na.rm=TRUE), label_temp_mean = max(label_temp_mean,na.rm=TRUE)) %>% 
-    rename(start_date_time = start_date_time_15_min)
+      label_temp_mean = final_qf) #%>% 
+    # padr::thicken(interval = '15 min')# %>% 
+    # group_by(start_date_time_15_min) %>% 
+    # summarise(temp_mean = mean(temp_mean,na.rm=TRUE), label_temp_mean = max(label_temp_mean,na.rm=TRUE)) %>% 
+    # rename(start_date_time = start_date_time_15_min)
   
   # Extract surface water elevation at 15 minute intervals for site of interest
   elev_site <- swe_all$EOS_5_min %>% subset(siteID == site) %>%
     as_tibble() %>%
     janitor::clean_names() %>%
     filter(horizontal_position=="102") %>%
-    # mutate(start_date_time= ymd_hms(start_date_time) - second(start_date_time)) %>%
+    mutate(start_date_time= ymd_hms(start_date_time) - second(start_date_time)) %>%
     select(c(start_date_time, surfacewater_elev_mean, s_wat_elev_final_qf)) %>%
     rename(
       elev = surfacewater_elev_mean,
-      label_elev_mean = s_wat_elev_final_qf
-    ) %>% padr::thicken(interval = '15 min') %>% 
-    group_by(start_date_time_15_min) %>% 
-    summarise(elev = mean(elev,na.rm=TRUE), label_elev_mean = max(label_elev_mean,na.rm = TRUE)) %>% 
-    rename(start_date_time = start_date_time_15_min)
+      label_elev_mean = s_wat_elev_final_qf) #%>%
+    # padr::thicken(interval = '15 min') %>% 
+    # group_by(start_date_time_15_min) %>% 
+    # summarise(elev = mean(elev,na.rm=TRUE), label_elev_mean = max(label_elev_mean,na.rm = TRUE)) %>% 
+    # rename(start_date_time = start_date_time_15_min)
   
   # Join water_quality and nitrate, and clean up
   data_site <- dplyr::left_join(
@@ -522,12 +524,15 @@ for(site in neon_sites){
   #base model with gam package
   model_gam_site<-gam::gam(nitrate_mean ~ spec_cond + oxygen + turbidity + temp_mean, data = modl_data)
   
-  # Stepwise selection of variables
-  step_model_gam<-gam::step.Gam(model_gam_site, scope=list("spec_cond"=~1+spec_cond+s(spec_cond,4)+s(spec_cond,6)+s(spec_cond,12),
-                                                           "oxygen"=~1+oxygen+s(oxygen,4)+s(oxygen,5)+s(oxygen,6)+s(oxygen,12),
-                                                           "turbidity"=~1+turbidity+s(turbidity,4)+s(turbidity,5)+s(turbidity,6)+s(turbidity,12),
-                                                           "temp_mean"=~1+temp_mean+s(temp_mean,4)+s(temp_mean,6)+s(temp_mean,12)))
-  # best model selected 
+  if(stepGam){
+    # Stepwise selection of variables
+    step_model_gam<-gam::step.Gam(model_gam_site, scope=list("spec_cond"=~1+spec_cond+s(spec_cond,4)+s(spec_cond,6)+s(spec_cond,12),
+                                                             "oxygen"=~1+oxygen+s(oxygen,4)+s(oxygen,5)+s(oxygen,6)+s(oxygen,12),
+                                                             "turbidity"=~1+turbidity+s(turbidity,4)+s(turbidity,5)+s(turbidity,6)+s(turbidity,12),
+                                                             "temp_mean"=~1+temp_mean+s(temp_mean,4)+s(temp_mean,6)+s(temp_mean,12)))
+    
+  }
+   # best model selected 
   best_model_gam_site<-mgcv::gam(nitrate_mean ~  s(spec_cond, k = smoothDimK) +
                                    s(oxygen, k = smoothDimK) +  s(temp_mean, k = smoothDimK) +
                                    s(log(turbidity + 1 ), k = smoothDimK) +
