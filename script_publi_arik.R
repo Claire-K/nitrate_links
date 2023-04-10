@@ -64,7 +64,7 @@ waq_cols_sel <- c("startDateTime","horizontalPosition",  "specificConductance","
                   "chlorophyll","chlorophyllFinalQF","turbidity",                
                   "turbidityFinalQF","fDOM","fDOMFinalQFSciRvw")
 # The dimension of the bases used to represent the smooth term. See ?mgcv::s()
-smoothDimK <- 12
+smoothDimK <- 6
 stepGam <- FALSE # Boolean, perform step-wise check on best GAM? Helps decide smoothDimK
 # Define the time range to apply the model
 modelTimeRange <- base::data.frame(site = c("ARIK","CARI","LEWI"),
@@ -73,7 +73,7 @@ modelTimeRange <- base::data.frame(site = c("ARIK","CARI","LEWI"),
                                    
 
 
-plot_dir <- file.path(plot_dir_base,paste0("smoothDimK_",smoothDimK))
+plot_dir <- file.path(plot_dir_base,paste0("smoothDimK_",smoothDimK,"_filter_S1tempElev"))
 # Create the save directory
 if(!dir.exists(plot_dir)){
   print(paste0("Creating the following directory path: ", plot_dir))
@@ -175,6 +175,8 @@ lsSmoothFig4 <- base::list()
 lsImportFig3 <- base::list()
 lsSiteImp <- list()
 lsAic <- list()
+lsARIMAmodls <- list()
+lsGamGammARMASumm <- list()
 for(site in neon_sites){
   siteName <- siteNameDf$siteName[siteNameDf$siteID == site]
   print(paste0("Conducting analysis for NEON siteID = ",site))
@@ -226,8 +228,8 @@ for(site in neon_sites){
     subset(siteID==site) %>%
     as_tibble() %>%
     janitor::clean_names()  %>%
-    # filter(horizontal_position == "101") %>%
-    filter(horizontal_position == "102") %>%
+    filter(horizontal_position == "101") %>%
+    # filter(horizontal_position == "102") %>%
     mutate(start_date_time = ymd_hms(start_date_time) - second(start_date_time)) %>%
     select(c(start_date_time, surf_water_temp_mean, final_qf)) %>%
     rename(
@@ -242,7 +244,8 @@ for(site in neon_sites){
   elev_site <- swe_all$EOS_5_min %>% subset(siteID == site) %>%
     as_tibble() %>%
     janitor::clean_names() %>%
-    filter(horizontal_position=="102") %>%
+    filter(horizontal_position == "101") %>%
+    # filter(horizontal_position=="102") %>%
     mutate(start_date_time= ymd_hms(start_date_time) - second(start_date_time)) %>%
     select(c(start_date_time, surfacewater_elev_mean, s_wat_elev_final_qf)) %>%
     rename(
@@ -291,8 +294,26 @@ for(site in neon_sites){
   # data_site$nitrate_mean = if_else(data_site$nitrate_mean  > 25, NA_real_ , data_site$nitrate_mean) #TODO Edit GL - high NO3 can be valid
   data_site$nitrate_mean = if_else(data_site$nitrate_mean <= 0, NA_real_ , data_site$nitrate_mean)
   # Remove poor quality CARI turbidity data:
+  if(length(unique(data_site$start_date_time)) != nrow(data_site)){
+    stop("Problem with duplicate timestamps")
+  }
+  #clear impossible data points
   if(site == "CARI"){
     data_site$turbidity[data_site$turbidity > 500] <- NA_real_
+    data_site$nitrate_mean <- if_else(data_site$nitrate_mean > 50, NA_real_ , data_site$nitrate_mean)
+    data_site$chloro = if_else(data_site$chloro > 200, NA_real_ , data_site$chloro)
+    data_site$spec_cond = if_else(data_site$spec_cond > 300, NA_real_ , data_site$spec_cond)
+  } else if (site == "ARIK"){
+    data_site$turbidity = if_else(data_site$turbidity < 0, NA_real_ , data_site$turbidity)
+    data_site$spec_cond = if_else(data_site$spec_cond < 100, NA_real_ , data_site$spec_cond)
+    data_site$nitrate_mean = if_else(data_site$nitrate_mean  > 25, NA_real_ , data_site$nitrate_mean)
+    data_site$nitrate_mean = if_else(data_site$nitrate_mean <= 0, NA_real_ , data_site$nitrate_mean)
+    data_site$fdom = if_else(data_site$fdom  > 140, NA_real_ , data_site$fdom)
+  } else if (site == "LEWI"){
+
+    data_site$nitrate_mean = if_else(data_site$nitrate_mean <= 5, NA_real_ , data_site$nitrate_mean)
+    data_site$turbidity = if_else(data_site$turbidity < 0, NA_real_ , data_site$turbidity)
+    data_site$temp_mean = if_else(data_site$temp_mean < 0, NA_real_ , data_site$temp_mean)
   }
   # Create a time_recod column
   #TODO Problem here, failed to gap-fill first!
@@ -562,24 +583,42 @@ for(site in neon_sites){
   ################
   a <- getViz(best_model_gam_site)
   
+  if(site == "ARIK"){
+    # TODO edit the breaks/labels to be exact rather than approximate
+    ylabFig4 <- "s(x)"
+    labelsX <- c("Nov-18","Jun-19", "Dec-19")
+    breaksX <- c(30000,50000,70000)
+  } else if(site == "CARI"){
+    ylabFig4 <- ""
+    labelsX <- c("Sept-18","Jul-19")
+    breaksX <- c(10000,20000)
+  } else if (site == "LEWI"){
+    ylabFig4 <- ""
+    labelsX <- c("Jul-18","Feb-19", "Sep-19")
+    breaksX <- c(20000,40000,60000)
+  }
+  
   var1 <- plot(sm(a, 1)) + l_fitLine(colour = "red") + l_ciLine(mul = 5, colour = "blue", linetype = 2) +
-    xlab(paste0("SpC [",dfUnits$units[dfUnits$var == "SpC"],"]")) + ylab("")  +
+    xlab(paste0("SpC [",dfUnits$units[dfUnits$var == "SpC"],"]")) + ylab(ylabFig4)  +
     theme_classic() + 
     ggtitle(siteName)
   var2 <- plot(sm(a, 2)) + l_fitLine(colour = "red") + l_ciLine(mul = 5, colour = "blue", linetype = 2) + 
-    xlab(paste0("DO [",dfUnits$units[dfUnits$var == "DO"],"]")) +ylab("") + ylim(-5,5) + theme_classic()
+    xlab(paste0("DO [",dfUnits$units[dfUnits$var == "DO"],"]")) +ylab(ylabFig4) + ylim(-5,5) + theme_classic()
   var3 <- plot(sm(a, 3)) + l_fitLine(colour = "red") +  l_ciLine(mul = 5, colour = "blue", linetype = 2) + 
-    xlab(paste0("Temp [",dfUnits$units[dfUnits$var == "Temp"],"]")) +ylab("")+ ylim(-5,5) + 
+    xlab(paste0("Temp [",dfUnits$units[dfUnits$var == "Temp"],"]")) +ylab(ylabFig4)+ ylim(-5,5) + 
     theme_classic()
   var4 <- plot(sm(a, 4)) + l_fitLine(colour = "red") + l_ciLine(mul = 5, colour = "blue", linetype = 2) +
-    xlab(paste0("Log(Turbidity) [",dfUnits$units[dfUnits$var == "turbidity"],"]")) + ylab("") +
+    xlab(paste0("Log(Turbidity) [",dfUnits$units[dfUnits$var == "turbidity"],"]")) + ylab(ylabFig4) +
     theme_classic()
   # TODO change to date
+  # DateBreaks <- modl_data$start_date_time[1]
   var5 <- plot(sm(a, 5)) + l_fitLine(colour = "red") +  l_ciLine(mul = 5, colour = "blue", linetype = 2) +
-    xlab("Time") + ylab("") +
-    theme_classic() 
+    xlab("Time") + ylab(ylabFig4) +
+    theme_classic() + scale_x_continuous(labels= labelsX , breaks = breaksX )
+  
+  
   var6 <- plot(sm(a,6)) + l_fitLine(colour = "red") + l_ciLine(mul = 5, colour = "blue", linetype = 2) + 
-    xlab("SWE [m]") + ylab("") +
+    xlab("SWE [m]") + ylab(ylabFig4) +
     theme_classic()
   
   
@@ -659,7 +698,39 @@ for(site in neon_sites){
   GAMM_site<-forecast::auto.arima(best_model_gam_site$residuals) # 5 df
   aAIC_GAMM_site <- (nrow(modl_data)*log(GAMM_site$sigma2)) + (sum(best_model_gam_site$edf) + 5) # for the GAMM
   
-  lsAic[[site]] <- base::list(aAic = aAIC_site, aAic_GAMM <- aAIC_GAMM_site)
+  # Extract autoarima results:
+  sumGam <- summary(ar_model)
+  sumGamm <- summary(GAMM_site)
+  lsArmaRslt <- base::list(site = site,GAM = sumGam, GAMM = sumGamm)
+  lsARIMAmodls[[site]] <- base::list(ar_modl = ar_model, GAMM = GAMM_site)
+  
+  lsGamGammARMASumm[[site]] <- lsArmaRslt
+  dfAic <- base::data.frame(site = site, aAIC = aAIC_site, aAIC_GAMM = aAIC_GAMM_site)
+  # --------- methods in script_paper_estimates.Rmd
+  # summary(best_model_gam_site)
+  if(site == "LEWI"){
+    n=13341
+    dfAdd <- 3 # TODO what does this mean?
+  } else if (site == "ARIK") {
+    n=14973
+    dfAdd <- 5
+  } else if (site == "CARI") {
+    n=8040
+    dfAdd <- 5
+  }
+  aAIC_site_rmd <- n*log(best_model_gam_site$sig2) + (2*sum(best_model_gam_site$edf))
+  # summary(best_model_gam_site)
+  
+  aAIC_GAMM_site_rmd <-(n*log(GAMM_site$sigma2)) + (sum(best_model_gam_site$edf) + dfAdd)
+  
+  dfAic_rmd <- base::data.frame(aAICrmd = aAIC_site_rmd, aAIC_GAMM = aAIC_GAMM_site_rmd)
+  dfAic <- cbind(dfAic, dfAic_rmd)
+
+  # --------- END methods in script_paper_estimates.Rmd
+  # Compile Gam Results
+
+  
+  lsAic[[site]] <- dfAic
   
   ################
   ### FIGURE 4 ###
@@ -685,12 +756,20 @@ for(site in neon_sites){
           panel.grid.major = element_line(colour = "grey", linetype = "dotted"),
           axis.line = element_line(color = "grey") )
   
+  
+  ###############
+  #### SI 2 ####
+  ##############
+  # gridExtra::grid.arrange(g1, g2,g3, layout_matrix = rbind(c(1,2,3)), widths = c(1, 1, 1))
 }
 
 # Combine all results of water quality characteristics:
 dtRsltWaq <- data.table::rbindlist(lsRsltsWaqChars)
 write.csv(dtRsltWaq,file.path(plot_dir, "WaterQualityCharacteristicsAmongSites.csv"))
 
+# Combine and write AIC results:
+dtAic <- data.table::rbindlist(lsAic)
+write.csv(dtAic, file.path(plot_dir,"aAIC_results_GAM_GAMM.csv"))
 
 # Combine panels to create Figure 2:
 plotAllFig2 <- mgcViz::gridPrint(lsFig2[["ARIK"]],lsFig2[["CARI"]],lsFig2[["LEWI"]], ncol=3)
@@ -736,3 +815,15 @@ ggplot2::ggsave(plot=plotImportFig3,
 ggplot2::ggsave(plot=plotImportFig3,
                 filename=file.path(plot_dir, "Fig_3_all_sites_importance.svg"),
                 width=6,height=6, units = "in")
+
+
+# Print results and save to file:
+sink(file.path(plot_dir,"ARMA_model_summaries.txt"))
+for(sn in names(lsGamGammARMASumm)){
+  print(sn)
+  print("ARMA MODEL, GAM residuals:\n")
+  summary(lsARIMAmodls[[sn]]$ar_modl)
+  print("ARMA MODEL, GAMM residuals: \n")
+  summary(lsARIMAmodls[[sn]]$GAMM)
+}
+sink(file=NULL)
