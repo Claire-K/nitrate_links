@@ -8,14 +8,15 @@
 # Changelog/contributions
 # 2021-05-21 Originally created, Claire Kermorvant
 # 2023-04-05 Update data acquisition & results display, generalized to multiple sites,
-#    change temp horizontal position from 101 (upstream) to 102 (downstream) 
 #    Added temporal aggregation method (mean/max)
 #    Manually remove anomalous CARI turbidity data, Guy Litt
 # 2023-04-09 Generate waq characteristics .csv ,
 #            Condensed Fig2 panel labels & reset 10pm GMT bounds, 
 #            Update GAM with surface water elevation 
 #            Subset model dataset to user-defined time ranges, Guy Litt
-
+# 2023-04-13 Add option to regularize timeseries
+# 
+# TODO change n to be length of timeseries rather than hard-coded
 #TODO substitute end_date_time for start_date_time
 # TODO re-upload Fig 2
 #######################
@@ -37,7 +38,7 @@ library(lubridate)
 library(padr)
 library(svglite)
 # library(devtools)
-# 
+# TODO remove A character from deg C (e.g. Fig 4)
 # install package in github used for custom plotting
 # devtools::install_github(repo = "https://github.com/remichel/rmTools.git")
 ###########################################
@@ -66,14 +67,24 @@ waq_cols_sel <- c("startDateTime","horizontalPosition",  "specificConductance","
 # The dimension of the bases used to represent the smooth term. See ?mgcv::s()
 smoothDimK <- 6
 stepGam <- FALSE # Boolean, perform step-wise check on best GAM? Helps decide smoothDimK
+regularizeTs <- c(TRUE,FALSE)[1] # Should timeseries be regularized to 15-min intervals?
 # Define the time range to apply the model
-modelTimeRange <- base::data.frame(site = c("ARIK","CARI","LEWI"),
+dataSetup <- base::data.frame(site = c("ARIK","CARI","LEWI"),
                                    startDate = as.POSIXct(c("2018-09-01","2018-06-01","2018-01-01"),tz="GMT"),
-                                   endDate = as.POSIXct(c("2020-01-01","2019-11-01","2020-01-01"),tz="GMT"))
-                                   
+                                   endDate = as.POSIXct(c("2020-01-01","2019-12-31","2019-12-31"),tz="GMT"),
+                              elevHor = c("101","102","102"),
+                              tempHor = c("101","102","102"),
+                              defaultHor = "102")
 
 
-plot_dir <- file.path(plot_dir_base,paste0("smoothDimK_",smoothDimK,"_filter_S1tempElev"))
+
+if(regularizeTs){regStr <- "Reg_"}else{regStr <- "NonReg_"}     
+sitesElev102 <- dataSetup$site[which(dataSetup$elevHor=="102")]
+sitesTemp102 <- dataSetup$site[which(dataSetup$tempHor=="102")]
+uniqId <- paste0("smoothDimK",smoothDimK, "_",regStr,"TempDownStrm_",paste0(sitesTemp102,collapse=""),
+                  "_ElevDownStrm_",paste0(sitesElev102,collapse=""))
+
+plot_dir <- file.path(plot_dir_base,uniqId)
 # Create the save directory
 if(!dir.exists(plot_dir)){
   print(paste0("Creating the following directory path: ", plot_dir))
@@ -167,6 +178,7 @@ origUnits <- unlist(lapply(waq_cols_sel, function(x) waq$variables_20288$units[w
 dfUnits <- data.frame(orig_cols = waq_cols_sel, units = origUnits)
 print(dfUnits)
 
+# Create lists that will be populated with various objects for compilation across sites
 lsRsltsWaqChars <- base::list()
 lsPlotTs <- base::list()
 lsFig2 <- base::list()
@@ -177,6 +189,8 @@ lsSiteImp <- list()
 lsAic <- list()
 lsARIMAmodls <- list()
 lsGamGammARMASumm <- list()
+lsDevCalc <- list()
+lsImport <- list()
 for(site in neon_sites){
   siteName <- siteNameDf$siteName[siteNameDf$siteID == site]
   print(paste0("Conducting analysis for NEON siteID = ",site))
@@ -184,7 +198,7 @@ for(site in neon_sites){
   # Filter for water quality data at NEON's downstream stations
   water_quality_site <- waq$waq_instantaneous %>% base::subset(siteID == site) %>%
     dplyr::as_tibble() %>%
-    dplyr::filter(horizontalPosition == "102") %>% # select the downstream station
+    dplyr::filter(horizontalPosition == dataSetup$defaultHor) %>% # select the downstream station
     dplyr::select(dplyr::all_of(waq_cols_sel)) %>%
     janitor::clean_names() %>%
     dplyr::mutate(
@@ -207,7 +221,18 @@ for(site in neon_sites){
       label_fdom = f_dom_final_qf_sci_rvw
     )
   # TODO add 15-min aggregation interval here??
-
+  #  Issue 36904 water quality algorithm error causes additional timestamps
+  # infrequently. This was fixed in the 2023 data release.
+  idxsDupTime <- which(duplicated(water_quality_site$start_date_time))
+  if(length(idxsDupTime)>0){
+    water_quality_site <- water_quality_site[-idxsDupTime,]
+  }
+  idxsDupTimePrev <- idxsDupTime
+  idxsNaVal <- intersect(which(is.na(water_quality_site$oxygen)),which(is.na(water_quality_site$spec_cond)))
+  
+  intersect(idxsDupTime,idxsNaVal)
+  
+  
   # Extract nitrate at 15 minute intervals
   nitrate_site <- nsw$NSW_15_minute %>% subset(siteID==site) %>%
     as_tibble() %>%
@@ -228,8 +253,7 @@ for(site in neon_sites){
     subset(siteID==site) %>%
     as_tibble() %>%
     janitor::clean_names()  %>%
-    filter(horizontal_position == "101") %>%
-    # filter(horizontal_position == "102") %>%
+    filter(horizontal_position == dataSetup$tempHor[dataSetup$site==site]) %>%
     mutate(start_date_time = ymd_hms(start_date_time) - second(start_date_time)) %>%
     select(c(start_date_time, surf_water_temp_mean, final_qf)) %>%
     rename(
@@ -244,8 +268,7 @@ for(site in neon_sites){
   elev_site <- swe_all$EOS_5_min %>% subset(siteID == site) %>%
     as_tibble() %>%
     janitor::clean_names() %>%
-    filter(horizontal_position == "101") %>%
-    # filter(horizontal_position=="102") %>%
+    filter(horizontal_position==dataSetup$elevHor[dataSetup$site==site]) %>%
     mutate(start_date_time= ymd_hms(start_date_time) - second(start_date_time)) %>%
     select(c(start_date_time, surfacewater_elev_mean, s_wat_elev_final_qf)) %>%
     rename(
@@ -321,12 +344,15 @@ for(site in neon_sites){
   
   # Edit GL:
   # First regularize timeseries to 15-min intervals
-  
-  data_site <- data_site %>%
-        padr::pad(interval = "15 mins")
+  if(regularizeTs){
+    data_site <- data_site %>%
+      padr::pad(interval = "15 mins")
+  }
   data_site$time_recod <- seq(from = 1, to = nrow(data_site))
   
-
+  # Check the total number of NAs by column
+  naCountCols <- lapply(ncol(data_site), function(j) length(which(is.na(data_site[,j]))))
+  dfNaCount <- data.frame(colname = names(data_site), naCount = unlist(naCountCols))
   ###############################
   ### SI 1 - Original timeseries ###
   ###############################
@@ -340,19 +366,19 @@ for(site in neon_sites){
   
   # Assign units: nitrate : micromoles/L; fDOM : QSU; turbidity : FNU, DO : mg/L; SpC microsiemens per Centimeter; 
   dfUnits <-  data.frame(var = names(dataPlot)[-1],
-             units = c("\u03BCMol/L","FNU","Â°C", "m", "\u03BCS/cm", "mg/L"))
+             units = c("\u03BCMol/L","FNU","°C", "m", "\u03BCS/cm", "mg/L"))
   # dfUnits <- rbind(dfUnits,data.frame(var="SWE",units="m")) # add in elevation
 
   longDf <- dataPlot %>% pivot_longer(-time, names_to = "variable") 
   longDf <- merge(longDf,dfUnits, by.x = "variable", by.y = "var")
-  longDf$lablUnit <- paste0(longDf$variable, " [",longDf$units,"]")
+  longDf$lablUnit <- paste0(longDf$variable, "\n[",longDf$units,"]")
   
   ## Plot data
   plotTs <- longDf %>% #dataPlot %>%
     # dplyr::select(start_date_time, nitrate_mean, turbidity, temp_mean, spec_cond, oxygen ) %>%
     # pivot_longer(-time, names_to = "variable") %>%
     ggplot(aes(x = time , y = value, col = variable)) +
-    geom_line(alpha=0.6) +
+    geom_point(size=0.01,alpha=0.3) +
     facet_grid(rows = vars(lablUnit),  scales = "free", space="free_x") +
     ggplot2::xlab("Time") +
     ggplot2::ylab("") +
@@ -405,7 +431,7 @@ for(site in neon_sites){
   plotFig2_top <- data_piv %>%
     ggplot(aes(x = start_date_time , y = value, col = variable)) + 
     ggtitle(siteName) +
-    geom_line() +
+    geom_point(size=0.01, alpha=0.5) +
     facet_grid(rows = vars(lablUnit),  scales = "free", space="free_x") +
     labs(y = "", x = "") +
     scale_x_datetime(date_labels ="%Y%m%d", breaks=scales::date_breaks("1 day")) +
@@ -442,7 +468,7 @@ for(site in neon_sites){
     # dplyr::rename(start_date_time = start_date_time, Elev. = elev, "N03-" = nitrate_mean, O2 = oxygen, Cond =  spec_cond, Temp. = temp_mean, Turb. = turbidity) %>%
     # pivot_longer(-start_date_time, names_to = "variable") %>%
     ggplot(aes(x = start_date_time , y = value, col = variable)) +
-    geom_line() +
+    geom_point(size=0.02, alpha=0.5) +
     facet_grid(rows = vars(lablUnit),  scales = "free", space="free_x") +
     labs(y = "", x = "") +
     scale_x_datetime(date_labels ="%Y%m%d", breaks=scales::date_breaks("1 day")) +
@@ -537,8 +563,8 @@ for(site in neon_sites){
   ###################
   
   # Create subset of data for modeling
-  bgnTime <- modelTimeRange$startDate[modelTimeRange$site == site]
-  endTime <- modelTimeRange$endDate[modelTimeRange$site == site]
+  bgnTime <- dataSetup$startDate[dataSetup$site == site]
+  endTime <- dataSetup$endDate[dataSetup$site == site]
 
   modl_data <- data_site %>% filter(start_date_time >= bgnTime & start_date_time <= endTime )
   
@@ -599,7 +625,7 @@ for(site in neon_sites){
   }
   
   var1 <- plot(sm(a, 1)) + l_fitLine(colour = "red") + l_ciLine(mul = 5, colour = "blue", linetype = 2) +
-    xlab(paste0("SpC [",dfUnits$units[dfUnits$var == "SpC"],"]")) + ylab(ylabFig4)  +
+    xlab(paste0("Spec. Cond. [",dfUnits$units[dfUnits$var == "SpC"],"]")) + ylab(ylabFig4)  +
     theme_classic() + 
     ggtitle(siteName)
   var2 <- plot(sm(a, 2)) + l_fitLine(colour = "red") + l_ciLine(mul = 5, colour = "blue", linetype = 2) + 
@@ -637,59 +663,98 @@ for(site in neon_sites){
   Deviance_GAMM_total <- (d_null - D_RES) / d_null
   
   
+  if(site == "ARIK"){
+    ?forecast::arimaorder()
+    armaOrder <- c(2,0,5) # 2,0,3 -> manuscript
+  } else if (site=="CARI"){
+    armaOrder <- c(3,0,2)
+    # armaOrder <- c(2,0,5)
+  } else if (site == "LEWI"){
+    armaOrder <- c(2,0,1)
+    # armaOrder <- c(2,0,5)
+  }
+  df_dev <- data.frame(type = "arma",
+             dev_residuals = D_RES,
+             dev_null = d_null,
+             dev_gamm_totl = Deviance_GAMM_total)
+  
   # Deviances of GAMMs minus one by one covariates
   GAM_elev<-mgcv::gam(nitrate_mean ~  s(spec_cond, k = smoothDimK) + s(oxygen, k = smoothDimK) +  s(temp_mean, k = smoothDimK) +
                         s(log(turbidity+1),  k = smoothDimK)+ s(time_recod, k = smoothDimK),
-                      data = modl_data, sp=best_model_gam_site$sp[c(1:5)])
+                      data = modl_data, sp=best_model_gam_site$sp[-grep("elev",names(best_model_gam_site$sp))])
   D_GAM <- deviance(GAM_elev)
-  D_RES <- sum(residuals(arima(residuals(GAM_elev), order = c(2,0,5)))^2, na.rm=T)
+  D_RES <- sum(residuals(arima(residuals(GAM_elev), order = armaOrder))^2, na.rm=T)
   Deviance_elev <- (D_GAMM_total - D_RES) / D_GAMM_total
   Deviance_elev
+  df_dev <- rbind(df_dev,data.frame(type = "elev",
+                       dev_residuals = D_RES,
+                       dev_null = D_GAMM_total,
+                       dev_gamm_totl = Deviance_elev))
   
   GAM_time<-mgcv::gam(nitrate_mean ~  s(spec_cond, k = smoothDimK) + s(oxygen, k = smoothDimK) +  s(temp_mean, k = smoothDimK) +
                         s(log(turbidity+1),  k = smoothDimK)+ s(elev, k = smoothDimK),
-                      data = modl_data, sp=best_model_gam_site$sp[c(1:4,6)])
+                      data = modl_data, sp=best_model_gam_site$sp[-grep("time",names(best_model_gam_site$sp))])
   D_GAM <- deviance(GAM_time)
-  D_RES <- sum(residuals(arima(residuals(GAM_time), order = c(2,0,5)))^2, na.rm=T)
+  D_RES <- sum(residuals(arima(residuals(GAM_time), order = armaOrder))^2, na.rm=T)
   Deviance_time <- (D_GAMM_total - D_RES) / D_GAMM_total
   Deviance_time
-  
+  df_dev <- rbind(df_dev,data.frame(type = "time",
+                                    dev_residuals = D_RES,
+                                    dev_null = D_GAMM_total,
+                                    dev_gamm_totl = Deviance_time))
   
   GAM_turbi<-mgcv::gam(nitrate_mean ~  s(spec_cond, k = smoothDimK) + s(oxygen, k = smoothDimK) +  s(temp_mean, k = smoothDimK) +
                          s(time_recod, k = smoothDimK)+ s(elev, k=smoothDimK),# Edit GL, add elev
-                         data = modl_data, sp=best_model_gam_site$sp[c(1:3,5,6)])
+                         data = modl_data, sp=best_model_gam_site$sp[-grep("turb",names(best_model_gam_site$sp))])
   D_GAM <- deviance(GAM_turbi)
-  D_RES <- sum(residuals(arima(residuals(GAM_turbi), order = c(2,0,5)))^2, na.rm=T)
+  D_RES <- sum(residuals(arima(residuals(GAM_turbi), order = armaOrder))^2, na.rm=T)
   Deviance_turbi <- (D_GAMM_total - D_RES) / D_GAMM_total
   Deviance_turbi
-  
+  df_dev <- rbind(df_dev,data.frame(type = "turbidity",
+                                    dev_residuals = D_RES,
+                                    dev_null = D_GAMM_total,
+                                    dev_gamm_totl = Deviance_turbi))
   
   GAM_temp<-mgcv::gam(nitrate_mean ~   s(spec_cond, k = smoothDimK) +  s(oxygen, k = smoothDimK) + s(log(turbidity+1),  k = smoothDimK)+
                         s(time_recod, k = smoothDimK)+ s(elev, k = smoothDimK),
-                      data = modl_data, sp=best_model_gam_site$sp[c(1,3:6)])
+                      data = modl_data, sp=best_model_gam_site$sp[-grep("temp",names(best_model_gam_site$sp))])
   D_GAM <- deviance(GAM_temp)
-  D_RES <- sum(residuals(arima(residuals(GAM_temp), order = c(2,0,5)))^2, na.rm=T)
+  D_RES <- sum(residuals(arima(residuals(GAM_temp), order = armaOrder))^2, na.rm=T)
   Deviance_temp <- (D_GAMM_total - D_RES) / D_GAMM_total
   Deviance_temp
+  df_dev <- rbind(df_dev,data.frame(type = "temp",
+                                    dev_residuals = D_RES,
+                                    dev_null = D_GAMM_total,
+                                    dev_gamm_totl = Deviance_temp))
+  
   
   GAM_oxygen<-mgcv::gam(nitrate_mean ~   s(spec_cond, k = smoothDimK) +  s(temp_mean, k = smoothDimK) + s(log(turbidity+1),  k = smoothDimK)+s(time_recod, k = smoothDimK)+
-                          s(elev, k = smoothDimK), data = modl_data, sp=best_model_gam_site$sp[c(1:2,4:6)])
+                          s(elev, k = smoothDimK), data = modl_data, sp=best_model_gam_site$sp[-grep("oxygen",names(best_model_gam_site$sp))])
   D_GAM <- deviance(GAM_oxygen)
-  D_RES <- sum(residuals(arima(residuals(GAM_oxygen), order = c(2,0,5)))^2, na.rm=T)
+  D_RES <- sum(residuals(arima(residuals(GAM_oxygen), order = armaOrder))^2, na.rm=T)
   Deviance_oxygen <- (D_GAMM_total - D_RES) / D_GAMM_total
   Deviance_oxygen
+  df_dev <- rbind(df_dev,data.frame(type = "oxygen",
+                                    dev_residuals = D_RES,
+                                    dev_null = D_GAMM_total,
+                                    dev_gamm_totl = Deviance_oxygen))
   
   
   GAM_cond<-mgcv::gam(nitrate_mean ~   s(oxygen, k = smoothDimK) +  s(temp_mean, k = smoothDimK) + s(log(turbidity+1),  k = smoothDimK)+s(time_recod, k = smoothDimK)+
-                        s(elev, k = smoothDimK), data = modl_data, sp=best_model_gam_site$sp[c(2:6)])
+                        s(elev, k = smoothDimK), data = modl_data, sp=best_model_gam_site$sp[-grep("cond",names(best_model_gam_site$sp))])
   D_GAM <- deviance(GAM_cond)
-  D_RES <- sum(residuals(arima(residuals(GAM_cond), order = c(2,0,5)))^2, na.rm=T)
+  D_RES <- sum(residuals(arima(residuals(GAM_cond), order = armaOrder))^2, na.rm=T)
   Deviance_cond <- (D_GAMM_total - D_RES) / D_GAMM_total
   Deviance_cond
-  
+  df_dev <- rbind(df_dev,data.frame(type = "cond",
+                                    dev_residuals = D_RES,
+                                    dev_null = D_GAMM_total,
+                                    dev_gamm_totl = Deviance_cond))
+  df_dev$site <- site
+  lsDevCalc[[site]] <- df_dev
   # deviances at arikaree
   site_dev<-c(Deviance_elev, Deviance_time,Deviance_turbi, Deviance_temp, Deviance_oxygen, Deviance_cond )
-  site_imp <- data.frame("Importance" = (1-site_dev)*100, "Var" = c("Elevation", "Time", "Log(turbidity)", "Temperature", "Dissolved Oxygen", "Special Conductance"))
+  site_imp <- data.frame("Importance" = (1-site_dev)*100, "Var" = c("Elevation", "Time", "Log(turbidity)", "Temperature", "Dissolved Oxygen", "Specific Conductance"))
   lsSiteImp[[site]] <- site_imp
   
   ### aAIC calculation ###
@@ -715,7 +780,8 @@ for(site in neon_sites){
     n=14973
     dfAdd <- 5
   } else if (site == "CARI") {
-    n=8040
+    n=8040 # Number of residuals in model
+    # n <- nrow()
     dfAdd <- 5
   }
   aAIC_site_rmd <- n*log(best_model_gam_site$sig2) + (2*sum(best_model_gam_site$edf))
@@ -737,7 +803,8 @@ for(site in neon_sites){
   ################
   
   total_imp<- site_imp
-  total_imp$site<-c( rep(siteName, 6))
+  total_imp$site<-siteName
+  lsImport[[site]] <- total_imp
   
   lsImportFig3[[site]] <- total_imp %>%
     ggplot(aes(x = Importance, y = Var, color = site, shape = site)) +
@@ -770,6 +837,10 @@ write.csv(dtRsltWaq,file.path(plot_dir, "WaterQualityCharacteristicsAmongSites.c
 # Combine and write AIC results:
 dtAic <- data.table::rbindlist(lsAic)
 write.csv(dtAic, file.path(plot_dir,"aAIC_results_GAM_GAMM.csv"))
+
+# Combine site results for calculations for variable importance
+dtDevCalc <- data.table::rbindlist(lsDevCalc)
+write.csv(dtDevCalc,file.path(plot_dir, "deviance_calcs_GAMM.csv"))
 
 # Combine panels to create Figure 2:
 plotAllFig2 <- mgcViz::gridPrint(lsFig2[["ARIK"]],lsFig2[["CARI"]],lsFig2[["LEWI"]], ncol=3)
