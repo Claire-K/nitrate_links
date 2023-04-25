@@ -17,8 +17,11 @@
 # 2023-04-13 Add option to regularize timeseries
 # 
 # TODO change n to be length of timeseries rather than hard-coded
-#TODO substitute end_date_time for start_date_time
-# TODO re-upload Fig 2
+# TODO address hard-coding of x-axis date in Fig 3
+#TODO substitute end_date_time for start_date_time (low priority)
+# TODO re-upload all figures to overleaf
+# TODO ARIK period of data modeled in Table 2 mis-represents model range??
+
 #######################
 ### Needed packages ###
 #######################
@@ -38,7 +41,6 @@ library(lubridate)
 library(padr)
 library(svglite)
 # library(devtools)
-# TODO remove A character from deg C (e.g. Fig 4)
 # install package in github used for custom plotting
 # devtools::install_github(repo = "https://github.com/remichel/rmTools.git")
 ###########################################
@@ -50,7 +52,6 @@ neon_sites <-  c("ARIK","LEWI","CARI")
 user_base_dir <- Sys.getenv("USERPROFILE")
 save_dir <- file.path(user_base_dir,"Documents","waq_nitrate_analysis")
 plot_dir_base <- file.path(save_dir, "plots")
-
 
 
 neonPkgVer <- utils::packageVersion("neonUtilities")
@@ -72,6 +73,8 @@ regularizeTs <- c(TRUE,FALSE)[1] # Should timeseries be regularized to 15-min in
 dataSetup <- base::data.frame(site = c("ARIK","CARI","LEWI"),
                                    startDate = as.POSIXct(c("2018-09-01","2018-06-01","2018-01-01"),tz="GMT"),
                                    endDate = as.POSIXct(c("2020-01-01","2019-12-31","2019-12-31"),tz="GMT"),
+                              modlStart = as.POSIXct(c("2018-09-01","2018-06-01","2018-01-01"), tz="GMT"),
+                              modlEnd = as.POSIXct(c("2019-12-31","2019-10-31","2019-12-31"),tz="GMT"),
                               elevHor = c("101","102","102"),
                               tempHor = c("101","102","102"),
                               defaultHor = "102")
@@ -183,8 +186,8 @@ lsRsltsWaqChars <- base::list()
 lsPlotTs <- base::list()
 lsFig2 <- base::list()
 lsBoxFig1 <- base::list()
-lsSmoothFig4 <- base::list()
-lsImportFig3 <- base::list()
+lsSmoothFig_3 <- base::list()
+lsImportFig4 <- base::list()
 lsSiteImp <- list()
 lsAic <- list()
 lsARIMAmodls <- list()
@@ -220,18 +223,13 @@ for(site in neon_sites){
       fdom = f_dom,
       label_fdom = f_dom_final_qf_sci_rvw
     )
-  # TODO add 15-min aggregation interval here??
-  #  Issue 36904 water quality algorithm error causes additional timestamps
+
+  # NEON Issue 36904 water quality algorithm error caused additional timestamps
   # infrequently. This was fixed in the 2023 data release.
   idxsDupTime <- which(duplicated(water_quality_site$start_date_time))
   if(length(idxsDupTime)>0){
     water_quality_site <- water_quality_site[-idxsDupTime,]
   }
-  idxsDupTimePrev <- idxsDupTime
-  idxsNaVal <- intersect(which(is.na(water_quality_site$oxygen)),which(is.na(water_quality_site$spec_cond)))
-  
-  intersect(idxsDupTime,idxsNaVal)
-  
   
   # Extract nitrate at 15 minute intervals
   nitrate_site <- nsw$NSW_15_minute %>% subset(siteID==site) %>%
@@ -241,12 +239,7 @@ for(site in neon_sites){
     select(c(start_date_time, surf_water_nitrate_mean, final_qf)) %>%
     rename(
       nitrate_mean = surf_water_nitrate_mean,
-      label_nitrate_mean = final_qf) #%>% 
-    # padr::thicken(interval = '15 min') %>% # rounding ensures 15 minute intervals
-    # group_by(start_date_time_15_min) %>% 
-    # summarise(nitrate_mean = mean(nitrate_mean,na.rm=TRUE), label_nitrate_mean = max(label_nitrate_mean,na.rm = TRUE)) %>% 
-    # rename(start_date_time = start_date_time_15_min)
-  
+      label_nitrate_mean = final_qf)  
   
   # Extract temperature at 15 minute intervals for site of interest
   temp_site <- temp_all$TSW_5min %>% 
@@ -258,11 +251,7 @@ for(site in neon_sites){
     select(c(start_date_time, surf_water_temp_mean, final_qf)) %>%
     rename(
       temp_mean = surf_water_temp_mean,
-      label_temp_mean = final_qf) #%>% 
-    # padr::thicken(interval = '15 min')# %>% 
-    # group_by(start_date_time_15_min) %>% 
-    # summarise(temp_mean = mean(temp_mean,na.rm=TRUE), label_temp_mean = max(label_temp_mean,na.rm=TRUE)) %>% 
-    # rename(start_date_time = start_date_time_15_min)
+      label_temp_mean = final_qf)
   
   # Extract surface water elevation at 15 minute intervals for site of interest
   elev_site <- swe_all$EOS_5_min %>% subset(siteID == site) %>%
@@ -274,11 +263,7 @@ for(site in neon_sites){
     rename(
       elev = surfacewater_elev_mean,
       label_elev_mean = s_wat_elev_final_qf) #%>%
-    # padr::thicken(interval = '15 min') %>% 
-    # group_by(start_date_time_15_min) %>% 
-    # summarise(elev = mean(elev,na.rm=TRUE), label_elev_mean = max(label_elev_mean,na.rm = TRUE)) %>% 
-    # rename(start_date_time = start_date_time_15_min)
-  
+
   # Join water_quality and nitrate, and clean up
   data_site <- dplyr::left_join(
     nitrate_site,
@@ -338,16 +323,18 @@ for(site in neon_sites){
     data_site$turbidity = if_else(data_site$turbidity < 0, NA_real_ , data_site$turbidity)
     data_site$temp_mean = if_else(data_site$temp_mean < 0, NA_real_ , data_site$temp_mean)
   }
-  # Create a time_recod column
-  #TODO Problem here, failed to gap-fill first!
-  # data_site$time_recod <- seq(from = 1, to = nrow(data_site))
   
-  # Edit GL:
   # First regularize timeseries to 15-min intervals
   if(regularizeTs){
     data_site <- data_site %>%
       padr::pad(interval = "15 mins")
   }
+  
+  # Subset data to modlStart and modlEnd timeframes:
+  idxsModl <- intersect(which(data_site$start_date_time >= dataSetup$modlStart[dataSetup$site==site]),
+                        which(data_site$start_date_time <= dataSetup$modlEnd[dataSetup$site==site]))
+  data_site <- data_site[idxsModl,]
+  
   data_site$time_recod <- seq(from = 1, to = nrow(data_site))
   
   # Check the total number of NAs by column
@@ -605,51 +592,51 @@ for(site in neon_sites){
   site_res
   
   ################
-  ### Figure 4 ###
+  ### Figure 3 ###
   ################
   a <- getViz(best_model_gam_site)
   
   if(site == "ARIK"){
     # TODO edit the breaks/labels to be exact rather than approximate
-    ylabFig4 <- "s(x)"
+    ylabFig_3 <- "s(x)"
     labelsX <- c("Nov-18","Jun-19", "Dec-19")
     breaksX <- c(30000,50000,70000)
   } else if(site == "CARI"){
-    ylabFig4 <- ""
+    ylabFig_3 <- ""
     labelsX <- c("Sept-18","Jul-19")
     breaksX <- c(10000,20000)
   } else if (site == "LEWI"){
-    ylabFig4 <- ""
+    ylabFig_3 <- ""
     labelsX <- c("Jul-18","Feb-19", "Sep-19")
     breaksX <- c(20000,40000,60000)
   }
   
   var1 <- plot(sm(a, 1)) + l_fitLine(colour = "red") + l_ciLine(mul = 5, colour = "blue", linetype = 2) +
-    xlab(paste0("Spec. Cond. [",dfUnits$units[dfUnits$var == "SpC"],"]")) + ylab(ylabFig4)  +
+    xlab(paste0("Spec. Cond. [",dfUnits$units[dfUnits$var == "SpC"],"]")) + ylab(ylabFig_3)  +
     theme_classic() + 
     ggtitle(siteName)
   var2 <- plot(sm(a, 2)) + l_fitLine(colour = "red") + l_ciLine(mul = 5, colour = "blue", linetype = 2) + 
-    xlab(paste0("DO [",dfUnits$units[dfUnits$var == "DO"],"]")) +ylab(ylabFig4) + ylim(-5,5) + theme_classic()
+    xlab(paste0("Diss. Oxygen [",dfUnits$units[dfUnits$var == "DO"],"]")) +ylab(ylabFig_3) + ylim(-5,5) + theme_classic()
   var3 <- plot(sm(a, 3)) + l_fitLine(colour = "red") +  l_ciLine(mul = 5, colour = "blue", linetype = 2) + 
-    xlab(paste0("Temp [",dfUnits$units[dfUnits$var == "Temp"],"]")) +ylab(ylabFig4)+ ylim(-5,5) + 
+    xlab(paste0("Temp [",dfUnits$units[dfUnits$var == "Temp"],"]")) +ylab(ylabFig_3)+ ylim(-5,5) + 
     theme_classic()
   var4 <- plot(sm(a, 4)) + l_fitLine(colour = "red") + l_ciLine(mul = 5, colour = "blue", linetype = 2) +
-    xlab(paste0("Log(Turbidity) [",dfUnits$units[dfUnits$var == "turbidity"],"]")) + ylab(ylabFig4) +
+    xlab(paste0("Log(Turbidity) [",dfUnits$units[dfUnits$var == "turbidity"],"]")) + ylab(ylabFig_3) +
     theme_classic()
   # TODO change to date
   # DateBreaks <- modl_data$start_date_time[1]
   var5 <- plot(sm(a, 5)) + l_fitLine(colour = "red") +  l_ciLine(mul = 5, colour = "blue", linetype = 2) +
-    xlab("Time") + ylab(ylabFig4) +
+    xlab("Time") + ylab(ylabFig_3) +
     theme_classic() + scale_x_continuous(labels= labelsX , breaks = breaksX )
   
   
   var6 <- plot(sm(a,6)) + l_fitLine(colour = "red") + l_ciLine(mul = 5, colour = "blue", linetype = 2) + 
-    xlab("SWE [m]") + ylab(ylabFig4) +
+    xlab("Surface Water\nElevation [m]") + ylab(ylabFig_3) +
     theme_classic()
   
   
   
-  lsSmoothFig4[[site]] <- gridPrint(var1, var2, var3, var4,  var5, var6, ncol = 1) 
+  lsSmoothFig_3[[site]] <- gridPrint(var1, var2, var3, var4,  var5, var6, ncol = 1) 
   
   ############################################
   ### Calculating importance of variables ###
@@ -662,9 +649,10 @@ for(site in neon_sites){
   D_RES <- sum(residuals(ar_model)^2, na.rm=T)
   Deviance_GAMM_total <- (d_null - D_RES) / d_null
   
-  
+  arimaOrderAuto <- forecast::arimaorder(ar_model)
+  print(paste0("ARIMA ORDER: ", arimaOrderAuto))
   if(site == "ARIK"){
-    ?forecast::arimaorder()
+    
     armaOrder <- c(2,0,5) # 2,0,3 -> manuscript
   } else if (site=="CARI"){
     armaOrder <- c(3,0,2)
@@ -773,19 +761,21 @@ for(site in neon_sites){
   dfAic <- base::data.frame(site = site, aAIC = aAIC_site, aAIC_GAMM = aAIC_GAMM_site)
   # --------- methods in script_paper_estimates.Rmd
   # summary(best_model_gam_site)
-  if(site == "LEWI"){
-    n=13341
+
+  n <- length(best_model_gam_site$residuals)
+  print(paste0("Total residuals at ",site,": ", n))
+  if(site == "LEWI"){ #16421
+    #n=13341 
     dfAdd <- 3 # TODO what does this mean?
-  } else if (site == "ARIK") {
-    n=14973
+  } else if (site == "ARIK") { #14894
+    #n=14973
     dfAdd <- 5
-  } else if (site == "CARI") {
-    n=8040 # Number of residuals in model
-    # n <- nrow()
+  } else if (site == "CARI") { #8650
+   # n=8040 # Number of residuals in model
     dfAdd <- 5
   }
+  
   aAIC_site_rmd <- n*log(best_model_gam_site$sig2) + (2*sum(best_model_gam_site$edf))
-  # summary(best_model_gam_site)
   
   aAIC_GAMM_site_rmd <-(n*log(GAMM_site$sigma2)) + (sum(best_model_gam_site$edf) + dfAdd)
   
@@ -806,7 +796,7 @@ for(site in neon_sites){
   total_imp$site<-siteName
   lsImport[[site]] <- total_imp
   
-  lsImportFig3[[site]] <- total_imp %>%
+  lsImportFig4[[site]] <- total_imp %>%
     ggplot(aes(x = Importance, y = Var, color = site, shape = site)) +
     geom_point(size = 4) +
     xlab(expression(paste("Variable importance (% of total deviance)")))+
@@ -850,21 +840,21 @@ ggplot2::ggsave(plot=plotAllFig2,
 ggplot2::ggsave(plot=plotAllFig2,
                 filename=file.path(plot_dir,"Fig_2_all_sites.svg"),
                 width = 10, height = 8)
-# Combine panels to create Fig 4
-plotAllFig4 <- mgcViz::gridPrint(lsSmoothFig4[["ARIK"]],lsSmoothFig4[["CARI"]],lsSmoothFig4[["LEWI"]],ncol=3)
-ggplot2::ggsave(plot=plotAllFig4,
-                filename=file.path(plot_dir,"Fig_4_all_sites.png"),
+# Combine panels to create Fig 3
+plotAllFig_3 <- mgcViz::gridPrint(lsSmoothFig_3[["ARIK"]],lsSmoothFig_3[["CARI"]],lsSmoothFig_3[["LEWI"]],ncol=3)
+ggplot2::ggsave(plot=plotAllFig_3,
+                filename=file.path(plot_dir,"Fig_3_all_sites.png"),
                 width = 10, height = 8)
-ggplot2::ggsave(plot=plotAllFig4,
-                filename=file.path(plot_dir,"Fig_4_all_sites.svg"),
+ggplot2::ggsave(plot=plotAllFig_3,
+                filename=file.path(plot_dir,"Fig_3_all_sites.svg"),
                 width = 10, height = 8)
 
-# Combine data to create Fig 3:
+# Combine data to create Fig 4:
 lsAllSiteImp <- lapply(names(lsSiteImp), function(n) mutate(lsSiteImp[[n]], site = n) )
 dtAllSiteImp <- data.table::rbindlist(lsAllSiteImp)
 dtAllSiteImp1 <- merge(dtAllSiteImp,siteNameDf,by.x = "site", by.y = "siteID") 
 
-plotImportFig3 <- dtAllSiteImp1 %>%
+plotImportFig4 <- dtAllSiteImp1 %>%
   ggplot(aes(x = Importance, y = Var, color = siteName, shape = siteName)) +
   geom_point(size = 4) +
   xlab(expression(paste("Variable importance (% of total deviance)")))+
@@ -880,11 +870,11 @@ plotImportFig3 <- dtAllSiteImp1 %>%
         axis.title.x = element_text(size=14),
         panel.grid.major = element_line(colour = "grey", linetype = "dotted"),
         axis.line = element_line(color = "grey") )
-ggplot2::ggsave(plot=plotImportFig3,
-                filename=file.path(plot_dir, "Fig_3_all_sites_importance.png"),
+ggplot2::ggsave(plot=plotImportFig4,
+                filename=file.path(plot_dir, "Fig_4_all_sites_importance.png"),
                 width=6,height = 6, units = "in")
-ggplot2::ggsave(plot=plotImportFig3,
-                filename=file.path(plot_dir, "Fig_3_all_sites_importance.svg"),
+ggplot2::ggsave(plot=plotImportFig4,
+                filename=file.path(plot_dir, "Fig_4_all_sites_importance.svg"),
                 width=6,height=6, units = "in")
 
 
