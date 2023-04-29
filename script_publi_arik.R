@@ -7,20 +7,21 @@
 #' @details Requires using neonUtilities >= version 2.2.1
 # Changelog/contributions
 # 2021-05-21 Originally created, Claire Kermorvant
-# 2023-04-05 Update data acquisition & results display, generalized to multiple sites,
-#    Added temporal aggregation method (mean/max)
-#    Manually remove anomalous CARI turbidity data, Guy Litt
+# 2023-04-05 Update data acquisition & results display, generalized to multiple sites, GL
 # 2023-04-09 Generate waq characteristics .csv ,
 #            Condensed Fig2 panel labels & reset 10pm GMT bounds, 
 #            Update GAM with surface water elevation 
 #            Subset model dataset to user-defined time ranges, Guy Litt
-# 2023-04-13 Add option to regularize timeseries
-# 
-# TODO change n to be length of timeseries rather than hard-coded
-# TODO address hard-coding of x-axis date in Fig 3
-#TODO substitute end_date_time for start_date_time (low priority)
+# 2023-04-13 Add timeseries regularization of 15 minutes
+# 2023-04-25 aAIC formula automation: Calculate ARMA model degrees of freedom,
+#           changed n to be length of GAM model residuals, GL
+# 2023-04-28 Assigned NEON 2021 release for all datasets,
+#            Automated Fig 3 x-axis date labeling
+# TODO create Supplementary Materials Fig 2
+# TODO save figures in journal format
 # TODO re-upload all figures to overleaf
 # TODO ARIK period of data modeled in Table 2 mis-represents model range??
+# TODO communicate ARIMA order 3,1,4 for LEWI
 
 #######################
 ### Needed packages ###
@@ -40,9 +41,7 @@ library(dplyr)
 library(lubridate)
 library(padr)
 library(svglite)
-# library(devtools)
-# install package in github used for custom plotting
-# devtools::install_github(repo = "https://github.com/remichel/rmTools.git")
+
 ###########################################
 ### download data of interest from NEON ###
 ###########################################
@@ -67,29 +66,28 @@ waq_cols_sel <- c("startDateTime","horizontalPosition",  "specificConductance","
                   "turbidityFinalQF","fDOM","fDOMFinalQFSciRvw")
 # The dimension of the bases used to represent the smooth term. See ?mgcv::s()
 smoothDimK <- 6
-stepGam <- FALSE # Boolean, perform step-wise check on best GAM? Helps decide smoothDimK
-regularizeTs <- c(TRUE,FALSE)[1] # Should timeseries be regularized to 15-min intervals?
-# Define the time range to apply the model
+stepGam <- FALSE # Boolean, perform step-wise check on best GAM? Helps decide smoothDimK. Set FALSE to proceed with automatic
+
+# Define the time range and sensor locations to apply the model
 dataSetup <- base::data.frame(site = c("ARIK","CARI","LEWI"),
                                    startDate = as.POSIXct(c("2018-09-01","2018-06-01","2018-01-01"),tz="GMT"),
                                    endDate = as.POSIXct(c("2020-01-01","2019-12-31","2019-12-31"),tz="GMT"),
                               modlStart = as.POSIXct(c("2018-09-01","2018-06-01","2018-01-01"), tz="GMT"),
                               modlEnd = as.POSIXct(c("2019-12-31","2019-10-31","2019-12-31"),tz="GMT"),
-                              elevHor = c("101","102","102"),
-                              tempHor = c("101","102","102"),
-                              defaultHor = "102")
+                              elevHor = c("101","102","102"), # Note - use 101 at ARIK due to fewer missing values
+                              tempHor = c("101","102","102"), # Note - use 101 at ARIK due to fewer missing values
+                              defaultHor = "102") # The default horizontal position for all data products
 
-
-
-if(regularizeTs){regStr <- "Reg_"}else{regStr <- "NonReg_"}     
 sitesElev102 <- dataSetup$site[which(dataSetup$elevHor=="102")]
 sitesTemp102 <- dataSetup$site[which(dataSetup$tempHor=="102")]
-uniqId <- paste0("smoothDimK",smoothDimK, "_",regStr,"TempDownStrm_",paste0(sitesTemp102,collapse=""),
+
+# Unique ID used in file saving directory structure
+uniqId <- paste0("smoothDimK",smoothDimK, "_Reg_","TempDownStrm_",paste0(sitesTemp102,collapse=""),
                   "_ElevDownStrm_",paste0(sitesElev102,collapse=""))
 
+# Assign directory for saving plots
 plot_dir <- file.path(plot_dir_base,uniqId)
-# Create the save directory
-if(!dir.exists(plot_dir)){
+if(!dir.exists(plot_dir)){ # Create the save directory
   print(paste0("Creating the following directory path: ", plot_dir))
   dir.create(plot_dir,recursive=TRUE)
 }
@@ -127,7 +125,8 @@ if(file.exists(file.path(save_dir,"nsw.rda"))) {
     enddate = "2019-12",
     package="expanded",
     token = Sys.getenv("NEON_TOKEN"),
-    check.size = FALSE
+    check.size = FALSE,
+    release="RELEASE-2021"
   )
   saveRDS(nsw, file.path(save_dir,"nsw.rda"))
 }
@@ -144,7 +143,8 @@ if(file.exists(file.path(save_dir,"temp_all.rda"))) {
     enddate = "2019-12",
     package="expanded",
     token = Sys.getenv("NEON_TOKEN"),
-    check.size = FALSE
+    check.size = FALSE,
+    release="RELEASE-2021"
   )
   saveRDS(temp_all, file.path(save_dir,"temp_all.rda"))
 }
@@ -162,7 +162,8 @@ if(file.exists(file.path(save_dir,"swe_all.rda"))) {
     enddate = "2019-12",
     package="expanded",
     token = Sys.getenv("NEON_TOKEN"),
-    check.size = FALSE
+    check.size = FALSE,
+    release="RELEASE-2021"
   )
   saveRDS(swe_all, file.path(save_dir,"swe_all.rda"))
 }
@@ -179,6 +180,7 @@ siteNameDf <- base::list(siteID = c("ARIK","CARI","LEWI"),
 # Extract water quality units from variables file:
 origUnits <- unlist(lapply(waq_cols_sel, function(x) waq$variables_20288$units[which(waq$variables_20288$fieldName==x)] ))
 dfUnits <- data.frame(orig_cols = waq_cols_sel, units = origUnits)
+dfUnits$VarName <- c("Nitrate","Turbidity","Temperature","Surface Water\nElevation","Specific\nConductance","Dissolved\n")
 print(dfUnits)
 
 # Create lists that will be populated with various objects for compilation across sites
@@ -225,7 +227,7 @@ for(site in neon_sites){
     )
 
   # NEON Issue 36904 water quality algorithm error caused additional timestamps
-  # infrequently. This was fixed in the 2023 data release.
+  # infrequently. This was fixed in the 2023 data release. Remove these duplicates:
   idxsDupTime <- which(duplicated(water_quality_site$start_date_time))
   if(length(idxsDupTime)>0){
     water_quality_site <- water_quality_site[-idxsDupTime,]
@@ -324,11 +326,10 @@ for(site in neon_sites){
     data_site$temp_mean = if_else(data_site$temp_mean < 0, NA_real_ , data_site$temp_mean)
   }
   
-  # First regularize timeseries to 15-min intervals
-  if(regularizeTs){
-    data_site <- data_site %>%
-      padr::pad(interval = "15 mins")
-  }
+  # Regularize timeseries to 15-min intervals
+  data_site <- data_site %>%
+    padr::pad(interval = "15 mins")
+
   
   # Subset data to modlStart and modlEnd timeframes:
   idxsModl <- intersect(which(data_site$start_date_time >= dataSetup$modlStart[dataSetup$site==site]),
@@ -354,16 +355,13 @@ for(site in neon_sites){
   # Assign units: nitrate : micromoles/L; fDOM : QSU; turbidity : FNU, DO : mg/L; SpC microsiemens per Centimeter; 
   dfUnits <-  data.frame(var = names(dataPlot)[-1],
              units = c("\u03BCMol/L","FNU","°C", "m", "\u03BCS/cm", "mg/L"))
-  # dfUnits <- rbind(dfUnits,data.frame(var="SWE",units="m")) # add in elevation
 
   longDf <- dataPlot %>% pivot_longer(-time, names_to = "variable") 
   longDf <- merge(longDf,dfUnits, by.x = "variable", by.y = "var")
   longDf$lablUnit <- paste0(longDf$variable, "\n[",longDf$units,"]")
   
   ## Plot data
-  plotTs <- longDf %>% #dataPlot %>%
-    # dplyr::select(start_date_time, nitrate_mean, turbidity, temp_mean, spec_cond, oxygen ) %>%
-    # pivot_longer(-time, names_to = "variable") %>%
+  plotTs <- longDf %>% 
     ggplot(aes(x = time , y = value, col = variable)) +
     geom_point(size=0.01,alpha=0.3) +
     facet_grid(rows = vars(lablUnit),  scales = "free", space="free_x") +
@@ -373,7 +371,7 @@ for(site in neon_sites){
     theme_minimal() +
     theme(legend.position = "none") + 
     ggtitle(paste0(siteName, " timeseries data"))
-    # theme_light()
+
   ggsave(plot = plotTs,
          filename = file.path(plot_dir,paste0("timeseries_",site,".png")),
          height = 7,width = 5, units = "in")
@@ -451,9 +449,6 @@ for(site in neon_sites){
   
   
   plotFig2_bttm <- data_piv2 %>%
-    # dplyr::select(start_date_time, nitrate_mean, turbidity, temp_mean, spec_cond, oxygen, elev ) %>%
-    # dplyr::rename(start_date_time = start_date_time, Elev. = elev, "N03-" = nitrate_mean, O2 = oxygen, Cond =  spec_cond, Temp. = temp_mean, Turb. = turbidity) %>%
-    # pivot_longer(-start_date_time, names_to = "variable") %>%
     ggplot(aes(x = start_date_time , y = value, col = variable)) +
     geom_point(size=0.02, alpha=0.5) +
     facet_grid(rows = vars(lablUnit),  scales = "free", space="free_x") +
@@ -467,7 +462,6 @@ for(site in neon_sites){
   
   
   # Combine top and bottom plots into single panel:
-  
   plotZoomTsFig2 <- gridPrint(plotFig2_top,plotFig2_bttm, ncol = 1)
   lsFig2[[site]] <- plotZoomTsFig2
   
@@ -482,13 +476,15 @@ for(site in neon_sites){
   sel_cols <- c("nitrate_mean","temp_mean","spec_cond","oxygen")
   
   data_plot_site<-cbind(data_site[,sel_cols], log(data_site$turbidity +1))
-  colnames(data_plot_site) <- c("Nitrate","Temperature","Spec. Cond.", "Oxygen C.", "log_Turbidity")
+  colnames(data_plot_site) <- c("Nitrate","Temperature","Specific\nConductance", "Dissolved\nOxygen", "log(Turbidity)","Surface Water\nElevation")
   data_plot_site<-melt(data_plot_site)
   data_plot_site$site<-rep(siteName, length = length(data_plot_site[,1]))
   
+  rowNitr <- grep("Nitr",dfUnits$VarName)
   gg<-ggplot(data = data_plot_site[which(data_plot_site$variable == "Nitrate"),], aes(factor(1), value, color = site)) +
     geom_boxplot() +  facet_wrap(~variable,scales="free",ncol=3)+ 
     scale_color_manual(values=c("#440154FF", "#277F8EFF", "#9FDA3AFF"))+
+    xlab()
     theme(axis.text.x=element_blank(),
           axis.text.y= element_text(size = 11),
           legend.text=element_text(size=15),
@@ -499,9 +495,11 @@ for(site in neon_sites){
           legend.title = element_blank(),
           strip.text.x = element_text(size = 15))
   
+  rowTemp <- grep("Temp",dfUnits$VarName)
   gg1<-ggplot(data = data_plot_site[which(data_plot_site$variable == "Temperature"),], aes(factor(1), value, color = site)) +
     geom_boxplot() +  facet_wrap(~variable,scales="free",ncol=3)+ 
     scale_color_manual(values=c("#440154FF", "#277F8EFF", "#9FDA3AFF"))+
+    ylab(paste0(dfUnits$VarName[rowTemp], " [",dfUnits$units[rowTemp],"]")) + 
     theme(axis.text.x=element_blank(),
           axis.text.y= element_text(size = 11),
           axis.title.x=element_blank(), 
@@ -564,7 +562,6 @@ for(site in neon_sites){
                                                              "oxygen"=~1+oxygen+s(oxygen,4)+s(oxygen,5)+s(oxygen,6)+s(oxygen,12),
                                                              "turbidity"=~1+turbidity+s(turbidity,4)+s(turbidity,5)+s(turbidity,6)+s(turbidity,12),
                                                              "temp_mean"=~1+temp_mean+s(temp_mean,4)+s(temp_mean,6)+s(temp_mean,12)))
-    
   }
    # best model selected 
   best_model_gam_site<-mgcv::gam(nitrate_mean ~  s(spec_cond, k = smoothDimK) +
@@ -599,26 +596,32 @@ for(site in neon_sites){
   if(site == "ARIK"){
     # TODO edit the breaks/labels to be exact rather than approximate
     ylabFig_3 <- "s(x)"
-    labelsX <- c("Nov-18","Jun-19", "Dec-19")
-    breaksX <- c(30000,50000,70000)
+    datesX <- as.POSIXct(c("Nov-01-18","Jun-01-19", "Dec-01-19"), format = "%b-%d-%y",tz="UTC")
   } else if(site == "CARI"){
     ylabFig_3 <- ""
-    labelsX <- c("Sept-18","Jul-19")
-    breaksX <- c(10000,20000)
+    datesX <- as.POSIXct(c("Jul-01-18","Oct-01-18","Jun-01-19","Oct-01-19"), format = "%b-%d-%y",tz="UTC")
+    # labelsX <- c("Sept-18","Jul-19")
+    # breaksX <- c(10000,20000)
   } else if (site == "LEWI"){
     ylabFig_3 <- ""
-    labelsX <- c("Jul-18","Feb-19", "Sep-19")
-    breaksX <- c(20000,40000,60000)
+    datesX <- as.POSIXct(c("Jul-01-18","Feb-01-19", "Sep-01-19"), format = "%b-%d-%y",tz="UTC")
+    # labelsX <- c("Jul-18","Feb-19", "Sep-19")
+    # breaksX <- c(20000,40000,60000)
   }
   
+  labelsX <- format.Date(datesX, format="%b-%y")
+  breaksX <- lapply(datesX, function(x) which(modl_data$start_date_time == x)) %>% unlist()
+  
+  
   var1 <- plot(sm(a, 1)) + l_fitLine(colour = "red") + l_ciLine(mul = 5, colour = "blue", linetype = 2) +
-    xlab(paste0("Spec. Cond. [",dfUnits$units[dfUnits$var == "SpC"],"]")) + ylab(ylabFig_3)  +
+    xlab(paste0("Specific Conductance [",dfUnits$units[dfUnits$var == "SpC"],"]")) + ylab(ylabFig_3)  +
     theme_classic() + 
     ggtitle(siteName)
   var2 <- plot(sm(a, 2)) + l_fitLine(colour = "red") + l_ciLine(mul = 5, colour = "blue", linetype = 2) + 
-    xlab(paste0("Diss. Oxygen [",dfUnits$units[dfUnits$var == "DO"],"]")) +ylab(ylabFig_3) + ylim(-5,5) + theme_classic()
+    xlab(paste0("Dissolved Oxygen [",dfUnits$units[dfUnits$var == "DO"],"]")) +ylab(ylabFig_3) +# ylim(-5,10) + 
+    theme_classic()
   var3 <- plot(sm(a, 3)) + l_fitLine(colour = "red") +  l_ciLine(mul = 5, colour = "blue", linetype = 2) + 
-    xlab(paste0("Temp [",dfUnits$units[dfUnits$var == "Temp"],"]")) +ylab(ylabFig_3)+ ylim(-5,5) + 
+    xlab(paste0("Temperature [",dfUnits$units[dfUnits$var == "Temp"],"]")) +ylab(ylabFig_3)+ #ylim(-5,10) + 
     theme_classic()
   var4 <- plot(sm(a, 4)) + l_fitLine(colour = "red") + l_ciLine(mul = 5, colour = "blue", linetype = 2) +
     xlab(paste0("Log(Turbidity) [",dfUnits$units[dfUnits$var == "turbidity"],"]")) + ylab(ylabFig_3) +
@@ -634,8 +637,6 @@ for(site in neon_sites){
     xlab("Surface Water\nElevation [m]") + ylab(ylabFig_3) +
     theme_classic()
   
-  
-  
   lsSmoothFig_3[[site]] <- gridPrint(var1, var2, var3, var4,  var5, var6, ncol = 1) 
   
   ############################################
@@ -649,18 +650,12 @@ for(site in neon_sites){
   D_RES <- sum(residuals(ar_model)^2, na.rm=T)
   Deviance_GAMM_total <- (d_null - D_RES) / d_null
   
+  # Total linear degrees of freedom from ARMA model:
+  linear_df <- length(coefficients(ar_model))
+  
   arimaOrderAuto <- forecast::arimaorder(ar_model)
-  print(paste0("ARIMA ORDER: ", arimaOrderAuto))
-  if(site == "ARIK"){
-    
-    armaOrder <- c(2,0,5) # 2,0,3 -> manuscript
-  } else if (site=="CARI"){
-    armaOrder <- c(3,0,2)
-    # armaOrder <- c(2,0,5)
-  } else if (site == "LEWI"){
-    armaOrder <- c(2,0,1)
-    # armaOrder <- c(2,0,5)
-  }
+  print(paste0("ARIMA ORDER: ",paste0(arimaOrderAuto, collapse = ",")))
+
   df_dev <- data.frame(type = "arma",
              dev_residuals = D_RES,
              dev_null = d_null,
@@ -671,7 +666,7 @@ for(site in neon_sites){
                         s(log(turbidity+1),  k = smoothDimK)+ s(time_recod, k = smoothDimK),
                       data = modl_data, sp=best_model_gam_site$sp[-grep("elev",names(best_model_gam_site$sp))])
   D_GAM <- deviance(GAM_elev)
-  D_RES <- sum(residuals(arima(residuals(GAM_elev), order = armaOrder))^2, na.rm=T)
+  D_RES <- sum(residuals(arima(residuals(GAM_elev), order = arimaOrderAuto))^2, na.rm=T)
   Deviance_elev <- (D_GAMM_total - D_RES) / D_GAMM_total
   Deviance_elev
   df_dev <- rbind(df_dev,data.frame(type = "elev",
@@ -683,7 +678,7 @@ for(site in neon_sites){
                         s(log(turbidity+1),  k = smoothDimK)+ s(elev, k = smoothDimK),
                       data = modl_data, sp=best_model_gam_site$sp[-grep("time",names(best_model_gam_site$sp))])
   D_GAM <- deviance(GAM_time)
-  D_RES <- sum(residuals(arima(residuals(GAM_time), order = armaOrder))^2, na.rm=T)
+  D_RES <- sum(residuals(arima(residuals(GAM_time), order = arimaOrderAuto))^2, na.rm=T)
   Deviance_time <- (D_GAMM_total - D_RES) / D_GAMM_total
   Deviance_time
   df_dev <- rbind(df_dev,data.frame(type = "time",
@@ -695,7 +690,7 @@ for(site in neon_sites){
                          s(time_recod, k = smoothDimK)+ s(elev, k=smoothDimK),# Edit GL, add elev
                          data = modl_data, sp=best_model_gam_site$sp[-grep("turb",names(best_model_gam_site$sp))])
   D_GAM <- deviance(GAM_turbi)
-  D_RES <- sum(residuals(arima(residuals(GAM_turbi), order = armaOrder))^2, na.rm=T)
+  D_RES <- sum(residuals(arima(residuals(GAM_turbi), order = arimaOrderAuto))^2, na.rm=T)
   Deviance_turbi <- (D_GAMM_total - D_RES) / D_GAMM_total
   Deviance_turbi
   df_dev <- rbind(df_dev,data.frame(type = "turbidity",
@@ -707,7 +702,7 @@ for(site in neon_sites){
                         s(time_recod, k = smoothDimK)+ s(elev, k = smoothDimK),
                       data = modl_data, sp=best_model_gam_site$sp[-grep("temp",names(best_model_gam_site$sp))])
   D_GAM <- deviance(GAM_temp)
-  D_RES <- sum(residuals(arima(residuals(GAM_temp), order = armaOrder))^2, na.rm=T)
+  D_RES <- sum(residuals(arima(residuals(GAM_temp), order = arimaOrderAuto))^2, na.rm=T)
   Deviance_temp <- (D_GAMM_total - D_RES) / D_GAMM_total
   Deviance_temp
   df_dev <- rbind(df_dev,data.frame(type = "temp",
@@ -719,7 +714,7 @@ for(site in neon_sites){
   GAM_oxygen<-mgcv::gam(nitrate_mean ~   s(spec_cond, k = smoothDimK) +  s(temp_mean, k = smoothDimK) + s(log(turbidity+1),  k = smoothDimK)+s(time_recod, k = smoothDimK)+
                           s(elev, k = smoothDimK), data = modl_data, sp=best_model_gam_site$sp[-grep("oxygen",names(best_model_gam_site$sp))])
   D_GAM <- deviance(GAM_oxygen)
-  D_RES <- sum(residuals(arima(residuals(GAM_oxygen), order = armaOrder))^2, na.rm=T)
+  D_RES <- sum(residuals(arima(residuals(GAM_oxygen), order = arimaOrderAuto))^2, na.rm=T)
   Deviance_oxygen <- (D_GAMM_total - D_RES) / D_GAMM_total
   Deviance_oxygen
   df_dev <- rbind(df_dev,data.frame(type = "oxygen",
@@ -731,7 +726,7 @@ for(site in neon_sites){
   GAM_cond<-mgcv::gam(nitrate_mean ~   s(oxygen, k = smoothDimK) +  s(temp_mean, k = smoothDimK) + s(log(turbidity+1),  k = smoothDimK)+s(time_recod, k = smoothDimK)+
                         s(elev, k = smoothDimK), data = modl_data, sp=best_model_gam_site$sp[-grep("cond",names(best_model_gam_site$sp))])
   D_GAM <- deviance(GAM_cond)
-  D_RES <- sum(residuals(arima(residuals(GAM_cond), order = armaOrder))^2, na.rm=T)
+  D_RES <- sum(residuals(arima(residuals(GAM_cond), order = arimaOrderAuto))^2, na.rm=T)
   Deviance_cond <- (D_GAMM_total - D_RES) / D_GAMM_total
   Deviance_cond
   df_dev <- rbind(df_dev,data.frame(type = "cond",
@@ -749,7 +744,7 @@ for(site in neon_sites){
   print(paste0("Length of timeseries: ", nrow(modl_data)))
   aAIC_site <- nrow(modl_data)*log(best_model_gam_site$sig2) + (2*sum(best_model_gam_site$edf)) # for the GAM
   GAMM_site<-forecast::auto.arima(best_model_gam_site$residuals) # 5 df
-  aAIC_GAMM_site <- (nrow(modl_data)*log(GAMM_site$sigma2)) + (sum(best_model_gam_site$edf) + 5) # for the GAMM
+  aAIC_GAMM_site <- (nrow(modl_data)*log(GAMM_site$sigma2)) + (sum(best_model_gam_site$edf) + linear_df) # for the GAMM
   
   # Extract autoarima results:
   sumGam <- summary(ar_model)
@@ -759,33 +754,21 @@ for(site in neon_sites){
   
   lsGamGammARMASumm[[site]] <- lsArmaRslt
   dfAic <- base::data.frame(site = site, aAIC = aAIC_site, aAIC_GAMM = aAIC_GAMM_site)
-  # --------- methods in script_paper_estimates.Rmd
-  # summary(best_model_gam_site)
-
+ 
+  # Total number of residuals used in aAIC calculation:
   n <- length(best_model_gam_site$residuals)
-  print(paste0("Total residuals at ",site,": ", n))
-  if(site == "LEWI"){ #16421
-    #n=13341 
-    dfAdd <- 3 # TODO what does this mean?
-  } else if (site == "ARIK") { #14894
-    #n=14973
-    dfAdd <- 5
-  } else if (site == "CARI") { #8650
-   # n=8040 # Number of residuals in model
-    dfAdd <- 5
-  }
+  print(paste0("Total GAM residuals at ",site,": ", n))
   
+  # aAIC corresponding to just the GAM model
   aAIC_site_rmd <- n*log(best_model_gam_site$sig2) + (2*sum(best_model_gam_site$edf))
-  
-  aAIC_GAMM_site_rmd <-(n*log(GAMM_site$sigma2)) + (sum(best_model_gam_site$edf) + dfAdd)
+  # aAIC corresponding to the GAMM model
+  aAIC_GAMM_site_rmd <-(n*log(GAMM_site$sigma2)) + (sum(best_model_gam_site$edf) + linear_df)
   
   dfAic_rmd <- base::data.frame(aAICrmd = aAIC_site_rmd, aAIC_GAMM = aAIC_GAMM_site_rmd)
   dfAic <- cbind(dfAic, dfAic_rmd)
 
-  # --------- END methods in script_paper_estimates.Rmd
-  # Compile Gam Results
 
-  
+  # Compile aAIC Results
   lsAic[[site]] <- dfAic
   
   ################
@@ -854,8 +837,15 @@ lsAllSiteImp <- lapply(names(lsSiteImp), function(n) mutate(lsSiteImp[[n]], site
 dtAllSiteImp <- data.table::rbindlist(lsAllSiteImp)
 dtAllSiteImp1 <- merge(dtAllSiteImp,siteNameDf,by.x = "site", by.y = "siteID") 
 
+#Change names for plot labels
+dtAllSiteImp1$Var <- gsub(pattern= "turb", replacement= "Turb", dtAllSiteImp1$Var)
+idxsElev <- grep("Elevation",dtAllSiteImp1$Var)
+dtAllSiteImp1$VarNew <- dtAllSiteImp1$Var
+dtAllSiteImp1$VarNew[idxsElev] <- "Surface Water\nElevation"
+dtAllSiteImp1$siteName <- gsub(pattern=" ", replacement="\n",dtAllSiteImp1$siteName)
+
 plotImportFig4 <- dtAllSiteImp1 %>%
-  ggplot(aes(x = Importance, y = Var, color = siteName, shape = siteName)) +
+  ggplot(aes(x = Importance, y = VarNew, color = siteName, shape = siteName)) +
   geom_point(size = 4) +
   xlab(expression(paste("Variable importance (% of total deviance)")))+
   ylab("") +
@@ -864,18 +854,19 @@ plotImportFig4 <- dtAllSiteImp1 %>%
   scale_shape_manual(values=c(15,16,17 ))+
   theme(legend.text = element_text(size = 13 ),
         legend.title = element_blank(),
-        legend.position = c(0.85, 0.12),
+        legend.position = "top",#c(0.85, 0.12),
         axis.text.x = element_text(size=14),
         axis.text.y = element_text(size=14),
         axis.title.x = element_text(size=14),
         panel.grid.major = element_line(colour = "grey", linetype = "dotted"),
-        axis.line = element_line(color = "grey") )
+        axis.line = element_line(color = "grey"),
+        legend.background = element_rect(fill=scales::alpha('white', 0.8)))
 ggplot2::ggsave(plot=plotImportFig4,
                 filename=file.path(plot_dir, "Fig_4_all_sites_importance.png"),
-                width=6,height = 6, units = "in")
+                width=7,height = 6, units = "in")
 ggplot2::ggsave(plot=plotImportFig4,
                 filename=file.path(plot_dir, "Fig_4_all_sites_importance.svg"),
-                width=6,height=6, units = "in")
+                width=7,height=6, units = "in")
 
 
 # Print results and save to file:
