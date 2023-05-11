@@ -828,19 +828,19 @@ for(site in neon_sites){
                                    gamm = gamm_y)
  # Generate model-fitted vs. observed regression plots
   pFitGam <- ggplot2::ggplot(df_modl_fits, aes(x = Nitrate, y = gam)) + 
-    geom_point() +
+    geom_point(size=0.5) +
     ylab(paste0("Modeled Nitrate [", dfUnits$units[dfUnits$var == "Nitrate"], "]")) +
     xlab(paste0("Observed Nitrate [", dfUnits$units[dfUnits$var == "Nitrate"], "]")) + 
     ggtitle(paste0("GAM ", siteName)) +
     ggplot2::theme_light()+
-    geom_abline(color = 'red',size = 2)
+    geom_abline(color = 'red',size = 1.5)
   pFitGamm <- ggplot2::ggplot(df_modl_fits, aes(x = Nitrate, y = gamm)) + 
-    geom_point() +
+    geom_point(size = 0.5) +
     ylab(paste0("Modeled Nitrate [", dfUnits$units[dfUnits$var == "Nitrate"], "]")) +
     xlab(paste0("Observed Nitrate [", dfUnits$units[dfUnits$var == "Nitrate"], "]")) + 
     ggtitle(paste0("GAMM ", siteName)) +
     ggplot2::theme_light()+
-    geom_abline(color = 'red',size = 1)
+    geom_abline(color = 'red',size = 1.5)
   
   
   lsRegrSI2[[paste0(site,'gam')]] <- pFitGam
