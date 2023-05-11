@@ -16,12 +16,17 @@
 # 2023-04-25 aAIC formula automation: Calculate ARMA model degrees of freedom,
 #           changed n to be length of GAM model residuals, GL
 # 2023-04-28 Assigned NEON 2021 release for all datasets,
-#            Automated Fig 3 x-axis date labeling
+#            Automated Fig 3 x-axis date labeling, GL
+# 2023-05-11 Add SI2 Figure, GL
+# TODO update axis labels figure 2
 # TODO create Supplementary Materials Fig 2
-# TODO save figures in journal format
+# TODO save figures in journal format ?pdf
 # TODO re-upload all figures to overleaf
 # TODO ARIK period of data modeled in Table 2 mis-represents model range??
 # TODO communicate ARIMA order 3,1,4 for LEWI
+# TODO Figure 1 y-axis labels need to span entire figure
+# TODO Figure 2 y-axis labels need shortened, \n
+# TODO if ggbreak ever works, cite S Xu#, M Chen#, T Feng, L Zhan, L Zhou, G Yu*. Use ggbreak to effectively utilize plotting space to deal with large datasets and outliers. Frontiers in Genetics. 2021, 12:774846. doi: 10.3389/fgene.2021.774846
 
 #######################
 ### Needed packages ###
@@ -41,6 +46,7 @@ library(dplyr)
 library(lubridate)
 library(padr)
 library(svglite)
+library(data.table)
 
 ###########################################
 ### download data of interest from NEON ###
@@ -179,23 +185,24 @@ siteNameDf <- base::list(siteID = c("ARIK","CARI","LEWI"),
 
 # Extract water quality units from variables file:
 origUnits <- unlist(lapply(waq_cols_sel, function(x) waq$variables_20288$units[which(waq$variables_20288$fieldName==x)] ))
-dfUnits <- data.frame(orig_cols = waq_cols_sel, units = origUnits)
-dfUnits$VarName <- c("Nitrate","Turbidity","Temperature","Surface Water\nElevation","Specific\nConductance","Dissolved\n")
-print(dfUnits)
+dfUnitsOrig <- data.frame(orig_cols = waq_cols_sel, units = origUnits)
+
 
 # Create lists that will be populated with various objects for compilation across sites
 lsRsltsWaqChars <- base::list()
 lsPlotTs <- base::list()
 lsFig2 <- base::list()
+lsModlData <- base::list()
 lsBoxFig1 <- base::list()
 lsSmoothFig_3 <- base::list()
 lsImportFig4 <- base::list()
-lsSiteImp <- list()
-lsAic <- list()
-lsARIMAmodls <- list()
-lsGamGammARMASumm <- list()
-lsDevCalc <- list()
-lsImport <- list()
+lsSiteImp <- base::list()
+lsAic <- base::list()
+lsARIMAmodls <- base::list()
+lsGamGammARMASumm <- base::list()
+lsDevCalc <- base::list()
+lsImport <- base::list()
+lsRegrSI2 <- base::list()
 for(site in neon_sites){
   siteName <- siteNameDf$siteName[siteNameDf$siteID == site]
   print(paste0("Conducting analysis for NEON siteID = ",site))
@@ -355,7 +362,9 @@ for(site in neon_sites){
   # Assign units: nitrate : micromoles/L; fDOM : QSU; turbidity : FNU, DO : mg/L; SpC microsiemens per Centimeter; 
   dfUnits <-  data.frame(var = names(dataPlot)[-1],
              units = c("\u03BCMol/L","FNU","°C", "m", "\u03BCS/cm", "mg/L"))
-
+  # Add in names useful for plotting
+  dfUnits$VarName <- c("Nitrate","Turbidity","Temperature","Surface Water\nElevation","Specific\nConductance","Dissolved\nOxygen")
+  
   longDf <- dataPlot %>% pivot_longer(-time, names_to = "variable") 
   longDf <- merge(longDf,dfUnits, by.x = "variable", by.y = "var")
   longDf$lablUnit <- paste0(longDf$variable, "\n[",longDf$units,"]")
@@ -376,7 +385,7 @@ for(site in neon_sites){
          filename = file.path(plot_dir,paste0("timeseries_",site,".png")),
          height = 7,width = 5, units = "in")
   ggsave(plot = plotTs,
-         filename = file.path(plot_dir,paste0("timeseries_",site,".svg")),
+         filename = file.path(plot_dir,paste0("timeseries_",site,".pdf")),
          height = 7,width = 5, units = "in")
   lsPlotTs[[site]] <- plotTs
   
@@ -406,12 +415,17 @@ for(site in neon_sites){
   }
 
   sub_data <-data_site[c(start:end),] %>%  dplyr::select(start_date_time, nitrate_mean, turbidity, temp_mean, spec_cond, oxygen, elev) %>%
-    dplyr::rename(start_date_time = start_date_time, Nitrate = nitrate_mean, DO = oxygen, SpC =  spec_cond, SWE = elev, Temp = temp_mean, turbidity = turbidity)
+    dplyr::rename(start_date_time = start_date_time, Nitrate = nitrate_mean, DO = oxygen, SpC =  spec_cond, SWE = elev, Temp = temp_mean, Turbidity = turbidity)
   data_piv <- sub_data %>% pivot_longer(-start_date_time, names_to = "variable")
   
   data_piv <- merge(data_piv,dfUnits, by.x = "variable", by.y = "var")
-  data_piv$lablUnit <- paste0(data_piv$variable, " [",data_piv$units,"]")
-  
+  data_piv$lablUnit <- paste0(data_piv$variable, "\n[",data_piv$units,"]")
+  data_piv$lablUnit <- data_piv$lablUnit %>% 
+    gsub(pattern="DO", replacement="Dissolved\nOxygen") %>% 
+    gsub(pattern="SpC",replacement="Specific\nCond.") %>%
+    gsub(pattern="SWE\n",replacement="Surface\nWater\nElev.")
+  # data_piv$lablUnit <- data_piv$lablUnit %>% gsub(pattern="Nitrate", replacement = expression("NO"[3]^"-") )
+  # unique(data_piv$lablUnit)
   
   plotFig2_top <- data_piv %>%
     ggplot(aes(x = start_date_time , y = value, col = variable)) + 
@@ -445,8 +459,11 @@ for(site in neon_sites){
     dplyr::rename(start_date_time = start_date_time, Nitrate = nitrate_mean, DO = oxygen, SpC =  spec_cond, SWE = elev, Temp = temp_mean, turbidity = turbidity) %>% 
     tidyr::pivot_longer(-start_date_time, names_to = "variable")
   data_piv2 <- merge(data_piv2,dfUnits, by.x = "variable", by.y = "var")
-  data_piv2$lablUnit <- paste0(data_piv2$variable, "\n [",data_piv2$units,"]")
-  
+  data_piv2$lablUnit <- paste0(data_piv2$variable, "\n[",data_piv2$units,"]")
+  data_piv2$lablUnit <- data_piv2$lablUnit %>% 
+    gsub(pattern="DO", replacement="Dissolved\nOxygen") %>% 
+    gsub(pattern="SpC",replacement="Specific\nCond.") %>%
+    gsub(pattern="SWE\n",replacement="Surface\nWater\nElev.")
   
   plotFig2_bttm <- data_piv2 %>%
     ggplot(aes(x = start_date_time , y = value, col = variable)) +
@@ -473,75 +490,75 @@ for(site in neon_sites){
   ################
   ### Figure 1 (boxplots) ### 
   ################
-  sel_cols <- c("nitrate_mean","temp_mean","spec_cond","oxygen")
-  
-  data_plot_site<-cbind(data_site[,sel_cols], log(data_site$turbidity +1))
-  colnames(data_plot_site) <- c("Nitrate","Temperature","Specific\nConductance", "Dissolved\nOxygen", "log(Turbidity)","Surface Water\nElevation")
-  data_plot_site<-melt(data_plot_site)
-  data_plot_site$site<-rep(siteName, length = length(data_plot_site[,1]))
-  
-  rowNitr <- grep("Nitr",dfUnits$VarName)
-  gg<-ggplot(data = data_plot_site[which(data_plot_site$variable == "Nitrate"),], aes(factor(1), value, color = site)) +
-    geom_boxplot() +  facet_wrap(~variable,scales="free",ncol=3)+ 
-    scale_color_manual(values=c("#440154FF", "#277F8EFF", "#9FDA3AFF"))+
-    xlab()
-    theme(axis.text.x=element_blank(),
-          axis.text.y= element_text(size = 11),
-          legend.text=element_text(size=15),
-          axis.title.x=element_blank(), 
-          axis.title.y = element_blank(),
-          legend.position="bottom",
-          legend.direction="vertical",
-          legend.title = element_blank(),
-          strip.text.x = element_text(size = 15))
-  
-  rowTemp <- grep("Temp",dfUnits$VarName)
-  gg1<-ggplot(data = data_plot_site[which(data_plot_site$variable == "Temperature"),], aes(factor(1), value, color = site)) +
-    geom_boxplot() +  facet_wrap(~variable,scales="free",ncol=3)+ 
-    scale_color_manual(values=c("#440154FF", "#277F8EFF", "#9FDA3AFF"))+
-    ylab(paste0(dfUnits$VarName[rowTemp], " [",dfUnits$units[rowTemp],"]")) + 
-    theme(axis.text.x=element_blank(),
-          axis.text.y= element_text(size = 11),
-          axis.title.x=element_blank(), 
-          axis.title.y = element_blank(),
-          legend.position= "none",
-          legend.title = element_blank(),
-          strip.text.x = element_text(size = 15))
-  
-  gg2<-ggplot(data = data_plot_site[which(data_plot_site$variable == "Spec. Cond."),], aes(factor(1), value, color = site)) +
-    geom_boxplot() +  facet_wrap(~variable,scales="free",ncol=3)+ 
-    scale_color_manual(values=c("#440154FF", "#277F8EFF", "#9FDA3AFF"))+
-    theme(axis.text.x=element_blank(),
-          axis.text.y= element_text(size = 11),
-          axis.title.x=element_blank(), 
-          axis.title.y = element_blank(),
-          legend.position= "none",
-          legend.title = element_blank(),
-          strip.text.x = element_text(size = 15))
-  gg3<-ggplot(data = data_plot_site[which(data_plot_site$variable == "Oxygen C."),], aes(factor(1), value, color = site)) +
-    geom_boxplot() +  facet_wrap(~variable,scales="free",ncol=3)+ 
-    scale_color_manual(values=c("#440154FF", "#277F8EFF", "#9FDA3AFF"))+
-    theme(axis.text.x=element_blank(),
-          axis.text.y= element_text(size = 11),
-          axis.title.x=element_blank(), 
-          axis.title.y = element_blank(),
-          legend.position= "none",
-          legend.title = element_blank(),
-          strip.text.x = element_text(size = 15))
-  gg4<-ggplot(data = data_plot_site[which(data_plot_site$variable == "log_Turbidity"),], aes(factor(1), value, color = site)) +
-    geom_boxplot() +  facet_wrap(~variable,scales="free",ncol=3)+ 
-    scale_color_manual(values=c("#440154FF", "#277F8EFF", "#9FDA3AFF"))+
-    theme(axis.text.x=element_blank(),
-          axis.text.y= element_text(size = 11),
-          axis.title.x=element_blank(), 
-          axis.title.y = element_blank(),
-          legend.position= "none",
-          legend.title = element_blank(),
-          strip.text.x = element_text(size = 15))
-  
-  lsBoxFig1[[site]] <- list(gg, gg1, gg2,gg3,gg4)
-  gridExtra::grid.arrange(gg, gg1, gg2,gg3,gg4, layout_matrix = rbind(c(1,2,3),c(1,4,5)), widths = c(1.2, 1, 1))
-  
+  # sel_cols <- c("nitrate_mean","temp_mean","spec_cond","oxygen")
+  # 
+  # data_plot_site<-cbind(data_site[,sel_cols], log(data_site$turbidity +1))
+  # colnames(data_plot_site) <- c("Nitrate","Temperature","Specific\nConductance", "Dissolved\nOxygen", "log(Turbidity)","Surface Water\nElevation")
+  # data_plot_site<-melt(data_plot_site)
+  # data_plot_site$site<-rep(siteName, length = length(data_plot_site[,1]))
+  # 
+  # rowNitr <- grep("Nitr",dfUnits$VarName)
+  # gg<-ggplot(data = data_plot_site[which(data_plot_site$variable == "Nitrate"),], aes(factor(1), value, color = site)) +
+  #   geom_boxplot() +  facet_wrap(~variable,scales="free",ncol=3)+ 
+  #   scale_color_manual(values=c("#440154FF", "#277F8EFF", "#9FDA3AFF"))+
+  #   xlab()
+  #   theme(axis.text.x=element_blank(),
+  #         axis.text.y= element_text(size = 11),
+  #         legend.text=element_text(size=15),
+  #         axis.title.x=element_blank(), 
+  #         axis.title.y = element_blank(),
+  #         legend.position="bottom",
+  #         legend.direction="vertical",
+  #         legend.title = element_blank(),
+  #         strip.text.x = element_text(size = 15))
+  # 
+  # rowTemp <- grep("Temp",dfUnits$VarName)
+  # gg1<-ggplot(data = data_plot_site[which(data_plot_site$variable == "Temperature"),], aes(factor(1), value, color = site)) +
+  #   geom_boxplot() +  facet_wrap(~variable,scales="free",ncol=3)+ 
+  #   scale_color_manual(values=c("#440154FF", "#277F8EFF", "#9FDA3AFF"))+
+  #   ylab(paste0(dfUnits$VarName[rowTemp], " [",dfUnits$units[rowTemp],"]")) + 
+  #   theme(axis.text.x=element_blank(),
+  #         axis.text.y= element_text(size = 11),
+  #         axis.title.x=element_blank(), 
+  #         axis.title.y = element_blank(),
+  #         legend.position= "none",
+  #         legend.title = element_blank(),
+  #         strip.text.x = element_text(size = 15))
+  # 
+  # gg2<-ggplot(data = data_plot_site[which(data_plot_site$variable == "Spec. Cond."),], aes(factor(1), value, color = site)) +
+  #   geom_boxplot() +  facet_wrap(~variable,scales="free",ncol=3)+ 
+  #   scale_color_manual(values=c("#440154FF", "#277F8EFF", "#9FDA3AFF"))+
+  #   theme(axis.text.x=element_blank(),
+  #         axis.text.y= element_text(size = 11),
+  #         axis.title.x=element_blank(), 
+  #         axis.title.y = element_blank(),
+  #         legend.position= "none",
+  #         legend.title = element_blank(),
+  #         strip.text.x = element_text(size = 15))
+  # gg3<-ggplot(data = data_plot_site[which(data_plot_site$variable == "Oxygen C."),], aes(factor(1), value, color = site)) +
+  #   geom_boxplot() +  facet_wrap(~variable,scales="free",ncol=3)+ 
+  #   scale_color_manual(values=c("#440154FF", "#277F8EFF", "#9FDA3AFF"))+
+  #   theme(axis.text.x=element_blank(),
+  #         axis.text.y= element_text(size = 11),
+  #         axis.title.x=element_blank(), 
+  #         axis.title.y = element_blank(),
+  #         legend.position= "none",
+  #         legend.title = element_blank(),
+  #         strip.text.x = element_text(size = 15))
+  # gg4<-ggplot(data = data_plot_site[which(data_plot_site$variable == "log_Turbidity"),], aes(factor(1), value, color = site)) +
+  #   geom_boxplot() +  facet_wrap(~variable,scales="free",ncol=3)+ 
+  #   scale_color_manual(values=c("#440154FF", "#277F8EFF", "#9FDA3AFF"))+
+  #   theme(axis.text.x=element_blank(),
+  #         axis.text.y= element_text(size = 11),
+  #         axis.title.x=element_blank(), 
+  #         axis.title.y = element_blank(),
+  #         legend.position= "none",
+  #         legend.title = element_blank(),
+  #         strip.text.x = element_text(size = 15))
+  # 
+  # lsBoxFig1[[site]] <- list(gg, gg1, gg2,gg3,gg4)
+  # gridExtra::grid.arrange(gg, gg1, gg2,gg3,gg4, layout_matrix = rbind(c(1,2,3),c(1,4,5)), widths = c(1.2, 1, 1))
+  # 
   
   ###################
   ### GAM at ARIK ###
@@ -552,11 +569,13 @@ for(site in neon_sites){
   endTime <- dataSetup$endDate[dataSetup$site == site]
 
   modl_data <- data_site %>% filter(start_date_time >= bgnTime & start_date_time <= endTime )
-  
-  #base model with gam package
-  model_gam_site<-gam::gam(nitrate_mean ~ spec_cond + oxygen + turbidity + temp_mean, data = modl_data)
+  modl_data$site <- site
+  lsModlData[[site]] <- modl_data
   
   if(stepGam){
+    #base model with gam package
+    model_gam_site<-gam::gam(nitrate_mean ~ spec_cond + oxygen + turbidity + temp_mean, data = modl_data)
+  
     # Stepwise selection of variables
     step_model_gam<-gam::step.Gam(model_gam_site, scope=list("spec_cond"=~1+spec_cond+s(spec_cond,4)+s(spec_cond,6)+s(spec_cond,12),
                                                              "oxygen"=~1+oxygen+s(oxygen,4)+s(oxygen,5)+s(oxygen,6)+s(oxygen,12),
@@ -573,6 +592,7 @@ for(site in neon_sites){
   #fill where we deleted na
   modl_data <- modl_data %>%
     mutate(gam_res = residuals(best_model_gam_site)) %>%
+    # mutate(gam_pred = stats::fitted.values(best_model_gam_site)) %>%
     as_tsibble(index=start_date_time) %>%
     fill_gaps()
   
@@ -800,8 +820,40 @@ for(site in neon_sites){
   ###############
   #### SI 2 ####
   ##############
-  # gridExtra::grid.arrange(g1, g2,g3, layout_matrix = rbind(c(1,2,3)), widths = c(1, 1, 1))
+  # --------------- Compile model fitting results for SI figure ---------------#
+  gamm_y <- best_model_gam_site$y +  stats::fitted.values(ar_model)
+  # Create a dataframe of gam and gamm fitted nitrate values
+  df_modl_fits <- base::data.frame(Nitrate = best_model_gam_site$y,
+                                   gam = best_model_gam_site$fitted.values,
+                                   gamm = gamm_y)
+ # Generate model-fitted vs. observed regression plots
+  pFitGam <- ggplot2::ggplot(df_modl_fits, aes(x = Nitrate, y = gam)) + 
+    geom_point() +
+    ylab(paste0("Modeled Nitrate [", dfUnits$units[dfUnits$var == "Nitrate"], "]")) +
+    xlab(paste0("Observed Nitrate [", dfUnits$units[dfUnits$var == "Nitrate"], "]")) + 
+    ggtitle(paste0("GAM ", siteName)) +
+    ggplot2::theme_light()+
+    geom_abline(color = 'red',size = 2)
+  pFitGamm <- ggplot2::ggplot(df_modl_fits, aes(x = Nitrate, y = gamm)) + 
+    geom_point() +
+    ylab(paste0("Modeled Nitrate [", dfUnits$units[dfUnits$var == "Nitrate"], "]")) +
+    xlab(paste0("Observed Nitrate [", dfUnits$units[dfUnits$var == "Nitrate"], "]")) + 
+    ggtitle(paste0("GAMM ", siteName)) +
+    ggplot2::theme_light()+
+    geom_abline(color = 'red',size = 1)
+  
+  
+  lsRegrSI2[[paste0(site,'gam')]] <- pFitGam
+  lsRegrSI2[[paste0(site,'gamm')]] <- pFitGamm
+ 
 }
+# Compile & Save SI2 Figure
+pRegrSI2 <- gridExtra::grid.arrange(lsRegrSI2[[1]], lsRegrSI2[[2]],lsRegrSI2[[3]],lsRegrSI2[[4]],
+                        lsRegrSI2[[5]],lsRegrSI2[[6]],
+                        layout_matrix = rbind(c(1,2),c(3,4),c(5,6)) )
+ggplot2::ggsave(plot=pRegrSI2,
+                filename=file.path(plot_dir,"Fig_SI2_fitted_regr.png"),
+                width = 6, height = 8)
 
 # Combine all results of water quality characteristics:
 dtRsltWaq <- data.table::rbindlist(lsRsltsWaqChars)
@@ -815,13 +867,74 @@ write.csv(dtAic, file.path(plot_dir,"aAIC_results_GAM_GAMM.csv"))
 dtDevCalc <- data.table::rbindlist(lsDevCalc)
 write.csv(dtDevCalc,file.path(plot_dir, "deviance_calcs_GAMM.csv"))
 
+
+
+# Combine all data to create Figure 1:
+allModlData <- data.table::rbindlist(lsModlData)
+vars_plotFig2 <- c("nitrate_mean","temp_mean","oxygen","turbidity","spec_cond","elev")
+allModlDataMelt <- data.table::melt(allModlData,id.vars = c("site"), measure.vars = vars_plotFig2)
+
+lsBoxFig1 <- base::list()
+for(var in vars_plotFig2 ){
+  subMelt <- allModlDataMelt %>% subset(variable == var)
+  
+  dfUnitsIdx <- grep(substring(var,first=1,last=4),dfUnits$VarName,ignore.case = TRUE)
+  ylabel <- paste0(dfUnits$VarNam[dfUnitsIdx]," [",dfUnits$units[dfUnitsIdx],"]")
+  
+  lsBoxFig1[[var]] <- ggplot2::ggplot(subMelt, aes(x=value,color = c(site))) +
+    ggplot2::geom_boxplot() +
+    ggplot2::coord_flip() +
+    ggplot2::facet_wrap(~variable,scales="free",ncol=3) + 
+    xlab(ylabel) +
+    # scale_y_continuous(breaks= pretty(subMelt$value, n=5))
+    scale_color_manual(values=c("#440154FF", "#277F8EFF", "#9FDA3AFF"))+
+    theme(axis.text.x=element_blank(),
+          # axis.text.x = element_text(angle = 90),
+          axis.text.y= element_text(size = 11),
+          axis.title.x=element_blank(), 
+          legend.position= "none",
+          axis.title.y = element_text(angle=90),
+          legend.title = element_blank(),
+          strip.text.x = element_blank())
+  
+  if(grepl("turb",var,ignore.case=TRUE)){
+    lsBoxFig1[[var]] <- lsBoxFig1[[var]]  + scale_x_log10()
+  }
+  
+  if(grepl("elev",var, ignore.case = TRUE)){ # Add axis breaks to elevation
+    lsBoxFig1[[var]] <- lsBoxFig1[[var]] + ggbreak::scale_x_break(c(126,225)) +
+      ggbreak::scale_x_break(c(227,1179)) 
+  }
+}
+
+blank <- grid::grid.rect(gp=grid::gpar(col="white"))
+
+# gridExtra::grid.arrange(gg, gg1, gg2,gg3,gg4, gg5, blank, layout_matrix = rbind(c(1,2,3,3),c(4,5,6,7)), widths = c(1, 1, 1, 1))
+fig1 <- gridExtra::grid.arrange(lsBoxFig1[[1]],lsBoxFig1[[2]],lsBoxFig1[[3]],
+                        lsBoxFig1[[4]],lsBoxFig1[[5]],lsBoxFig1[[6]],
+                        layout_matrix = rbind(c(1,2,3),c(4,5,6)), widths = c(1, 1, 1, 1))
+
+legend_b <- cowplot::get_legend(lsBoxFig1[[var]] + theme(legend.position="top"))
+plotFig1 <- cowplot::plot_grid(fig1, legend_b, ncol = 1, rel_heights = c(1, .2))
+
+ggplot2::ggsave(plot=plotFig1,
+                filename=file.path(plot_dir,"Fig_1_all_sites.pdf"),
+                width = 6, height = 6)
+
+ggplot2::ggsave(plot=plotFig1,
+                filename=file.path(plot_dir,"Fig_1_all_sites.png"),
+                width = 6, height = 6)
+
+# ggplot2::ggplot(allModlDataMelt, aes(x=value,color = c(site))) +
+  # geom_boxplot()
+
 # Combine panels to create Figure 2:
 plotAllFig2 <- mgcViz::gridPrint(lsFig2[["ARIK"]],lsFig2[["CARI"]],lsFig2[["LEWI"]], ncol=3)
 ggplot2::ggsave(plot=plotAllFig2,
                 filename=file.path(plot_dir,"Fig_2_all_sites.png"),
                 width = 10, height = 8)
 ggplot2::ggsave(plot=plotAllFig2,
-                filename=file.path(plot_dir,"Fig_2_all_sites.svg"),
+                filename=file.path(plot_dir,"Fig_2_all_sites.pdf"),
                 width = 10, height = 8)
 # Combine panels to create Fig 3
 plotAllFig_3 <- mgcViz::gridPrint(lsSmoothFig_3[["ARIK"]],lsSmoothFig_3[["CARI"]],lsSmoothFig_3[["LEWI"]],ncol=3)
@@ -829,7 +942,7 @@ ggplot2::ggsave(plot=plotAllFig_3,
                 filename=file.path(plot_dir,"Fig_3_all_sites.png"),
                 width = 10, height = 8)
 ggplot2::ggsave(plot=plotAllFig_3,
-                filename=file.path(plot_dir,"Fig_3_all_sites.svg"),
+                filename=file.path(plot_dir,"Fig_3_all_sites.pdf"),
                 width = 10, height = 8)
 
 # Combine data to create Fig 4:
@@ -865,7 +978,7 @@ ggplot2::ggsave(plot=plotImportFig4,
                 filename=file.path(plot_dir, "Fig_4_all_sites_importance.png"),
                 width=7,height = 6, units = "in")
 ggplot2::ggsave(plot=plotImportFig4,
-                filename=file.path(plot_dir, "Fig_4_all_sites_importance.svg"),
+                filename=file.path(plot_dir, "Fig_4_all_sites_importance.pdf"),
                 width=7,height=6, units = "in")
 
 
