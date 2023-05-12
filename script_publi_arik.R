@@ -821,7 +821,7 @@ for(site in neon_sites){
   #### SI 2 ####
   ##############
   # --------------- Compile model fitting results for SI figure ---------------#
-  gamm_y <- best_model_gam_site$y +  stats::fitted.values(ar_model)
+  gamm_y <- best_model_gam_site$fitted.values +  stats::fitted.values(ar_model)
   # Create a dataframe of gam and gamm fitted nitrate values
   df_modl_fits <- base::data.frame(Nitrate = best_model_gam_site$y,
                                    gam = best_model_gam_site$fitted.values,
@@ -833,14 +833,14 @@ for(site in neon_sites){
     xlab(paste0("Observed Nitrate [", dfUnits$units[dfUnits$var == "Nitrate"], "]")) + 
     ggtitle(paste0("GAM ", siteName)) +
     ggplot2::theme_light()+
-    geom_abline(color = 'red',size = 1.5)
+    geom_abline(color = 'red',size = 0.8)
   pFitGamm <- ggplot2::ggplot(df_modl_fits, aes(x = Nitrate, y = gamm)) + 
     geom_point(size = 0.5) +
     ylab(paste0("Modeled Nitrate [", dfUnits$units[dfUnits$var == "Nitrate"], "]")) +
     xlab(paste0("Observed Nitrate [", dfUnits$units[dfUnits$var == "Nitrate"], "]")) + 
     ggtitle(paste0("GAMM ", siteName)) +
     ggplot2::theme_light()+
-    geom_abline(color = 'red',size = 1.5)
+    geom_abline(color = 'red',size = 0.8)
   
   
   lsRegrSI2[[paste0(site,'gam')]] <- pFitGam
@@ -853,6 +853,10 @@ pRegrSI2 <- gridExtra::grid.arrange(lsRegrSI2[[1]], lsRegrSI2[[2]],lsRegrSI2[[3]
                         layout_matrix = rbind(c(1,2),c(3,4),c(5,6)) )
 ggplot2::ggsave(plot=pRegrSI2,
                 filename=file.path(plot_dir,"Fig_SI2_fitted_regr.png"),
+                width = 6, height = 8)
+
+ggplot2::ggsave(plot=pRegrSI2,
+                filename=file.path(plot_dir,"Fig_SI2_fitted_regr.pdf"),
                 width = 6, height = 8)
 
 # Combine all results of water quality characteristics:
