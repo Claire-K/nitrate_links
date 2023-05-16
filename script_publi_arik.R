@@ -4,7 +4,7 @@
 #' @description Companion code to "Understanding links between water-quality 
 #' variables and nitrate concentration in freshwater streams using 
 #' high-frequency sensor data" https://arxiv.org/abs/2106.01719
-#' @details Requires using neonUtilities >= version 2.2.1
+#' @details Requires using neonUtilities >= version 2.2.1; Developed with R 4.1.0
 # Changelog/contributions
 # 2021-05-21 Originally created, Claire Kermorvant
 # 2023-04-05 Update data acquisition & results display, generalized to multiple sites, GL
@@ -18,15 +18,9 @@
 # 2023-04-28 Assigned NEON 2021 release for all datasets,
 #            Automated Fig 3 x-axis date labeling, GL
 # 2023-05-11 Add SI2 Figure, GL
-# TODO update axis labels figure 2
-# TODO create Supplementary Materials Fig 2
+# 2023-05-15 Update aAIC file write & tweak figures, GL
 # TODO save figures in journal format ?pdf
-# TODO re-upload all figures to overleaf
-# TODO ARIK period of data modeled in Table 2 mis-represents model range??
 # TODO communicate ARIMA order 3,1,4 for LEWI
-# TODO Figure 1 y-axis labels need to span entire figure
-# TODO Figure 2 y-axis labels need shortened, \n
-# TODO if ggbreak ever works, cite S Xu#, M Chen#, T Feng, L Zhan, L Zhou, G Yu*. Use ggbreak to effectively utilize plotting space to deal with large datasets and outliers. Frontiers in Genetics. 2021, 12:774846. doi: 10.3389/fgene.2021.774846
 
 #######################
 ### Needed packages ###
@@ -367,7 +361,7 @@ for(site in neon_sites){
   
   longDf <- dataPlot %>% pivot_longer(-time, names_to = "variable") 
   longDf <- merge(longDf,dfUnits, by.x = "variable", by.y = "var")
-  longDf$lablUnit <- paste0(longDf$variable, "\n[",longDf$units,"]")
+  longDf$lablUnit <- paste0(longDf$VarName, "\n[",longDf$units,"]")
   
   ## Plot data
   plotTs <- longDf %>% 
@@ -424,8 +418,8 @@ for(site in neon_sites){
     gsub(pattern="DO", replacement="Dissolved\nOxygen") %>% 
     gsub(pattern="SpC",replacement="Specific\nCond.") %>%
     gsub(pattern="SWE\n",replacement="Surface\nWater\nElev.")
-  # data_piv$lablUnit <- data_piv$lablUnit %>% gsub(pattern="Nitrate", replacement = expression("NO"[3]^"-") )
-  # unique(data_piv$lablUnit)
+
+  fig2topx <- pretty(data_piv$start_date_time)
   
   plotFig2_top <- data_piv %>%
     ggplot(aes(x = start_date_time , y = value, col = variable)) + 
@@ -433,7 +427,7 @@ for(site in neon_sites){
     geom_point(size=0.01, alpha=0.5) +
     facet_grid(rows = vars(lablUnit),  scales = "free", space="free_x") +
     labs(y = "", x = "") +
-    scale_x_datetime(date_labels ="%Y%m%d", breaks=scales::date_breaks("1 day")) +
+    scale_x_datetime(date_labels ="%Y%m%d", breaks=fig2topx, limits = range(fig2topx)) +
     theme_minimal() +
     theme(legend.position = "none",
           strip.text.y = element_text(size = 6),
@@ -455,6 +449,8 @@ for(site in neon_sites){
     end2 <- which(data_site$start_date_time == "2019-08-06 22:00:00 UTC")
   }
   
+ 
+  
   data_piv2<-data_site[c(start2:end2),] %>%  dplyr::select(start_date_time, nitrate_mean, turbidity, temp_mean, spec_cond, oxygen, elev) %>%
     dplyr::rename(start_date_time = start_date_time, Nitrate = nitrate_mean, DO = oxygen, SpC =  spec_cond, SWE = elev, Temp = temp_mean, turbidity = turbidity) %>% 
     tidyr::pivot_longer(-start_date_time, names_to = "variable")
@@ -465,12 +461,15 @@ for(site in neon_sites){
     gsub(pattern="SpC",replacement="Specific\nCond.") %>%
     gsub(pattern="SWE\n",replacement="Surface\nWater\nElev.")
   
+  fig2btmx <- pretty(data_piv2$start_date_time)
+  
   plotFig2_bttm <- data_piv2 %>%
     ggplot(aes(x = start_date_time , y = value, col = variable)) +
     geom_point(size=0.02, alpha=0.5) +
     facet_grid(rows = vars(lablUnit),  scales = "free", space="free_x") +
     labs(y = "", x = "") +
-    scale_x_datetime(date_labels ="%Y%m%d", breaks=scales::date_breaks("1 day")) +
+    scale_x_datetime(date_labels ="%Y%m%d", breaks=fig2btmx, limits = range(fig2btmx)) +
+    # scale_x_datetime(date_labels ="%Y%m%d", breaks=scales::date_breaks("1 day")) +
     theme_minimal() +
     theme(legend.position = "none",
           strip.text.y = element_text(size = 6),
@@ -487,81 +486,10 @@ for(site in neon_sites){
   ggsave(plot=plotZoomTsFig2,
          filename=file.path(plot_dir,paste0("Figure_2_ZoomTS_",site,".png")))
 
-  ################
-  ### Figure 1 (boxplots) ### 
-  ################
-  # sel_cols <- c("nitrate_mean","temp_mean","spec_cond","oxygen")
-  # 
-  # data_plot_site<-cbind(data_site[,sel_cols], log(data_site$turbidity +1))
-  # colnames(data_plot_site) <- c("Nitrate","Temperature","Specific\nConductance", "Dissolved\nOxygen", "log(Turbidity)","Surface Water\nElevation")
-  # data_plot_site<-melt(data_plot_site)
-  # data_plot_site$site<-rep(siteName, length = length(data_plot_site[,1]))
-  # 
-  # rowNitr <- grep("Nitr",dfUnits$VarName)
-  # gg<-ggplot(data = data_plot_site[which(data_plot_site$variable == "Nitrate"),], aes(factor(1), value, color = site)) +
-  #   geom_boxplot() +  facet_wrap(~variable,scales="free",ncol=3)+ 
-  #   scale_color_manual(values=c("#440154FF", "#277F8EFF", "#9FDA3AFF"))+
-  #   xlab()
-  #   theme(axis.text.x=element_blank(),
-  #         axis.text.y= element_text(size = 11),
-  #         legend.text=element_text(size=15),
-  #         axis.title.x=element_blank(), 
-  #         axis.title.y = element_blank(),
-  #         legend.position="bottom",
-  #         legend.direction="vertical",
-  #         legend.title = element_blank(),
-  #         strip.text.x = element_text(size = 15))
-  # 
-  # rowTemp <- grep("Temp",dfUnits$VarName)
-  # gg1<-ggplot(data = data_plot_site[which(data_plot_site$variable == "Temperature"),], aes(factor(1), value, color = site)) +
-  #   geom_boxplot() +  facet_wrap(~variable,scales="free",ncol=3)+ 
-  #   scale_color_manual(values=c("#440154FF", "#277F8EFF", "#9FDA3AFF"))+
-  #   ylab(paste0(dfUnits$VarName[rowTemp], " [",dfUnits$units[rowTemp],"]")) + 
-  #   theme(axis.text.x=element_blank(),
-  #         axis.text.y= element_text(size = 11),
-  #         axis.title.x=element_blank(), 
-  #         axis.title.y = element_blank(),
-  #         legend.position= "none",
-  #         legend.title = element_blank(),
-  #         strip.text.x = element_text(size = 15))
-  # 
-  # gg2<-ggplot(data = data_plot_site[which(data_plot_site$variable == "Spec. Cond."),], aes(factor(1), value, color = site)) +
-  #   geom_boxplot() +  facet_wrap(~variable,scales="free",ncol=3)+ 
-  #   scale_color_manual(values=c("#440154FF", "#277F8EFF", "#9FDA3AFF"))+
-  #   theme(axis.text.x=element_blank(),
-  #         axis.text.y= element_text(size = 11),
-  #         axis.title.x=element_blank(), 
-  #         axis.title.y = element_blank(),
-  #         legend.position= "none",
-  #         legend.title = element_blank(),
-  #         strip.text.x = element_text(size = 15))
-  # gg3<-ggplot(data = data_plot_site[which(data_plot_site$variable == "Oxygen C."),], aes(factor(1), value, color = site)) +
-  #   geom_boxplot() +  facet_wrap(~variable,scales="free",ncol=3)+ 
-  #   scale_color_manual(values=c("#440154FF", "#277F8EFF", "#9FDA3AFF"))+
-  #   theme(axis.text.x=element_blank(),
-  #         axis.text.y= element_text(size = 11),
-  #         axis.title.x=element_blank(), 
-  #         axis.title.y = element_blank(),
-  #         legend.position= "none",
-  #         legend.title = element_blank(),
-  #         strip.text.x = element_text(size = 15))
-  # gg4<-ggplot(data = data_plot_site[which(data_plot_site$variable == "log_Turbidity"),], aes(factor(1), value, color = site)) +
-  #   geom_boxplot() +  facet_wrap(~variable,scales="free",ncol=3)+ 
-  #   scale_color_manual(values=c("#440154FF", "#277F8EFF", "#9FDA3AFF"))+
-  #   theme(axis.text.x=element_blank(),
-  #         axis.text.y= element_text(size = 11),
-  #         axis.title.x=element_blank(), 
-  #         axis.title.y = element_blank(),
-  #         legend.position= "none",
-  #         legend.title = element_blank(),
-  #         strip.text.x = element_text(size = 15))
-  # 
-  # lsBoxFig1[[site]] <- list(gg, gg1, gg2,gg3,gg4)
-  # gridExtra::grid.arrange(gg, gg1, gg2,gg3,gg4, layout_matrix = rbind(c(1,2,3),c(1,4,5)), widths = c(1.2, 1, 1))
-  # 
-  
+
+
   ###################
-  ### GAM at ARIK ###
+  ### GAM at site ###
   ###################
   
   # Create subset of data for modeling
@@ -625,8 +553,6 @@ for(site in neon_sites){
   } else if (site == "LEWI"){
     ylabFig_3 <- ""
     datesX <- as.POSIXct(c("Jul-01-18","Feb-01-19", "Sep-01-19"), format = "%b-%d-%y",tz="UTC")
-    # labelsX <- c("Jul-18","Feb-19", "Sep-19")
-    # breaksX <- c(20000,40000,60000)
   }
   
   labelsX <- format.Date(datesX, format="%b-%y")
@@ -651,7 +577,6 @@ for(site in neon_sites){
   var5 <- plot(sm(a, 5)) + l_fitLine(colour = "red") +  l_ciLine(mul = 5, colour = "blue", linetype = 2) +
     xlab("Time") + ylab(ylabFig_3) +
     theme_classic() + scale_x_continuous(labels= labelsX , breaks = breaksX )
-  
   
   var6 <- plot(sm(a,6)) + l_fitLine(colour = "red") + l_ciLine(mul = 5, colour = "blue", linetype = 2) + 
     xlab("Surface Water\nElevation [m]") + ylab(ylabFig_3) +
@@ -762,9 +687,9 @@ for(site in neon_sites){
   
   ### aAIC calculation ###
   print(paste0("Length of timeseries: ", nrow(modl_data)))
-  aAIC_site <- nrow(modl_data)*log(best_model_gam_site$sig2) + (2*sum(best_model_gam_site$edf)) # for the GAM
+  aAIC_site <- length(best_model_gam_site$residuals)*log(best_model_gam_site$sig2) + (2*sum(best_model_gam_site$edf)) # for the GAM
   GAMM_site<-forecast::auto.arima(best_model_gam_site$residuals) # 5 df
-  aAIC_GAMM_site <- (nrow(modl_data)*log(GAMM_site$sigma2)) + (sum(best_model_gam_site$edf) + linear_df) # for the GAMM
+  aAIC_GAMM_site <- (length(GAMM_site$residuals)*log(GAMM_site$sigma2)) + (sum(best_model_gam_site$edf) + linear_df) # for the GAMM
   
   # Extract autoarima results:
   sumGam <- summary(ar_model)
@@ -773,20 +698,11 @@ for(site in neon_sites){
   lsARIMAmodls[[site]] <- base::list(ar_modl = ar_model, GAMM = GAMM_site)
   
   lsGamGammARMASumm[[site]] <- lsArmaRslt
-  dfAic <- base::data.frame(site = site, aAIC = aAIC_site, aAIC_GAMM = aAIC_GAMM_site)
+  dfAic <- base::data.frame(site = site, aAIC_GAM = aAIC_site, aAIC_GAMM = aAIC_GAMM_site)
  
   # Total number of residuals used in aAIC calculation:
   n <- length(best_model_gam_site$residuals)
   print(paste0("Total GAM residuals at ",site,": ", n))
-  
-  # aAIC corresponding to just the GAM model
-  aAIC_site_rmd <- n*log(best_model_gam_site$sig2) + (2*sum(best_model_gam_site$edf))
-  # aAIC corresponding to the GAMM model
-  aAIC_GAMM_site_rmd <-(n*log(GAMM_site$sigma2)) + (sum(best_model_gam_site$edf) + linear_df)
-  
-  dfAic_rmd <- base::data.frame(aAICrmd = aAIC_site_rmd, aAIC_GAMM = aAIC_GAMM_site_rmd)
-  dfAic <- cbind(dfAic, dfAic_rmd)
-
 
   # Compile aAIC Results
   lsAic[[site]] <- dfAic
@@ -815,7 +731,6 @@ for(site in neon_sites){
           axis.title.x = element_text(size=14),
           panel.grid.major = element_line(colour = "grey", linetype = "dotted"),
           axis.line = element_line(color = "grey") )
-  
   
   ###############
   #### SI 2 ####
@@ -890,10 +805,8 @@ for(var in vars_plotFig2 ){
     ggplot2::coord_flip() +
     ggplot2::facet_wrap(~variable,scales="free",ncol=3) + 
     xlab(ylabel) +
-    # scale_y_continuous(breaks= pretty(subMelt$value, n=5))
     scale_color_manual(values=c("#440154FF", "#277F8EFF", "#9FDA3AFF"))+
     theme(axis.text.x=element_blank(),
-          # axis.text.x = element_text(angle = 90),
           axis.text.y= element_text(size = 11),
           axis.title.x=element_blank(), 
           legend.position= "none",
@@ -961,12 +874,15 @@ dtAllSiteImp1$VarNew <- dtAllSiteImp1$Var
 dtAllSiteImp1$VarNew[idxsElev] <- "Surface Water\nElevation"
 dtAllSiteImp1$siteName <- gsub(pattern=" ", replacement="\n",dtAllSiteImp1$siteName)
 
+xFig4 <- pretty(dtAllSiteImp1$Importance)
+
 plotImportFig4 <- dtAllSiteImp1 %>%
   ggplot(aes(x = Importance, y = VarNew, color = siteName, shape = siteName)) +
   geom_point(size = 4) +
   xlab(expression(paste("Variable importance (% of total deviance)")))+
   ylab("") +
   ggtitle("")+ 
+  scale_x_continuous(breaks = xFig4,limits = range(xFig4)) +
   scale_color_manual(values=c("#440154FF", "#277F8EFF", "#9FDA3AFF"))+
   scale_shape_manual(values=c(15,16,17 ))+
   theme(legend.text = element_text(size = 13 ),
