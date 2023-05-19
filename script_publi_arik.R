@@ -19,8 +19,6 @@
 #            Automated Fig 3 x-axis date labeling, GL
 # 2023-05-11 Add SI2 Figure, GL
 # 2023-05-15 Update aAIC file write & tweak figures, GL
-# TODO save figures in journal format ?pdf
-# TODO communicate ARIMA order 3,1,4 for LEWI
 
 #######################
 ### Needed packages ###
@@ -408,13 +406,16 @@ for(site in neon_sites){
     end <- which(data_site$start_date_time == "2018-03-27 10:00:00 UTC")
   }
 
-  sub_data <-data_site[c(start:end),] %>%  dplyr::select(start_date_time, nitrate_mean, turbidity, temp_mean, spec_cond, oxygen, elev) %>%
-    dplyr::rename(start_date_time = start_date_time, Nitrate = nitrate_mean, DO = oxygen, SpC =  spec_cond, SWE = elev, Temp = temp_mean, Turbidity = turbidity)
+  sub_data <-data_site[c(start:end),] %>% 
+    dplyr::select(start_date_time, nitrate_mean, turbidity, temp_mean, spec_cond, oxygen, elev) %>%
+    dplyr::rename(Nitrate = nitrate_mean, DO = oxygen, SpC =  spec_cond, SWE = elev, Temp = temp_mean)
   data_piv <- sub_data %>% pivot_longer(-start_date_time, names_to = "variable")
   
   data_piv <- merge(data_piv,dfUnits, by.x = "variable", by.y = "var")
   data_piv$lablUnit <- paste0(data_piv$variable, "\n[",data_piv$units,"]")
   data_piv$lablUnit <- data_piv$lablUnit %>% 
+    gsub(pattern="turbidity", replacement="Turbidity") %>% 
+    gsub(pattern="Temp",replacement="Temp.") %>%
     gsub(pattern="DO", replacement="Dissolved\nOxygen") %>% 
     gsub(pattern="SpC",replacement="Specific\nCond.") %>%
     gsub(pattern="SWE\n",replacement="Surface\nWater\nElev.")
@@ -451,16 +452,19 @@ for(site in neon_sites){
   
  
   
-  data_piv2<-data_site[c(start2:end2),] %>%  dplyr::select(start_date_time, nitrate_mean, turbidity, temp_mean, spec_cond, oxygen, elev) %>%
-    dplyr::rename(start_date_time = start_date_time, Nitrate = nitrate_mean, DO = oxygen, SpC =  spec_cond, SWE = elev, Temp = temp_mean, turbidity = turbidity) %>% 
+  data_piv2<-data_site[c(start2:end2),] %>%  
+    dplyr::select(start_date_time, nitrate_mean, turbidity, temp_mean, spec_cond, oxygen, elev) %>%
+    dplyr::rename(Nitrate = nitrate_mean, DO = oxygen, SpC =  spec_cond, SWE = elev, Temp = temp_mean) %>% 
     tidyr::pivot_longer(-start_date_time, names_to = "variable")
   data_piv2 <- merge(data_piv2,dfUnits, by.x = "variable", by.y = "var")
   data_piv2$lablUnit <- paste0(data_piv2$variable, "\n[",data_piv2$units,"]")
   data_piv2$lablUnit <- data_piv2$lablUnit %>% 
+    gsub(pattern="turbidity", replacement="Turbidity") %>% 
+    gsub(pattern="Temp",replacement="Temp.") %>% 
     gsub(pattern="DO", replacement="Dissolved\nOxygen") %>% 
     gsub(pattern="SpC",replacement="Specific\nCond.") %>%
     gsub(pattern="SWE\n",replacement="Surface\nWater\nElev.")
-  
+    
   fig2btmx <- pretty(data_piv2$start_date_time)
   
   plotFig2_bttm <- data_piv2 %>%
@@ -692,10 +696,10 @@ for(site in neon_sites){
   aAIC_GAMM_site <- (length(GAMM_site$residuals)*log(GAMM_site$sigma2)) + (sum(best_model_gam_site$edf) + linear_df) # for the GAMM
   
   # Extract autoarima results:
-  sumGam <- summary(ar_model)
+  sumGam <- summary(best_model_gam_site)
   sumGamm <- summary(GAMM_site)
   lsArmaRslt <- base::list(site = site,GAM = sumGam, GAMM = sumGamm)
-  lsARIMAmodls[[site]] <- base::list(ar_modl = ar_model, GAMM = GAMM_site)
+  lsARIMAmodls[[site]] <- base::list(ar_modl = ar_model, GAMM = GAMM_site, GAM =best_model_gam_site )
   
   lsGamGammARMASumm[[site]] <- lsArmaRslt
   dfAic <- base::data.frame(site = site, aAIC_GAM = aAIC_site, aAIC_GAMM = aAIC_GAMM_site)
@@ -905,10 +909,14 @@ ggplot2::ggsave(plot=plotImportFig4,
 # Print results and save to file:
 sink(file.path(plot_dir,"ARMA_model_summaries.txt"))
 for(sn in names(lsGamGammARMASumm)){
+  print(" ----------------------------------------------------- ")
   print(sn)
-  print("ARMA MODEL, GAM residuals:\n")
-  summary(lsARIMAmodls[[sn]]$ar_modl)
-  print("ARMA MODEL, GAMM residuals: \n")
-  summary(lsARIMAmodls[[sn]]$GAMM)
+  print(paste0(sn, " GAM model summary"))
+  print(base::summary(lsARIMAmodls[[sn]]$GAM))
+  print(paste0(sn," ARIMA order"))
+  print(forecast::arimaorder(lsARIMAmodls[[sn]]$ar_modl))
+  print(paste0(sn, " ARIMA MODEL of GAM residuals summary:"))
+  print(base::summary(lsARIMAmodls[[sn]]$GAMM))
+  print(" ----------------------------------------------------- ")
 }
 sink(file=NULL)
