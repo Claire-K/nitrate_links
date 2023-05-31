@@ -7,18 +7,7 @@
 #' @details Requires using neonUtilities >= version 2.2.1; Developed with R 4.1.0
 # Changelog/contributions
 # 2021-05-21 Originally created, Claire Kermorvant
-# 2023-04-05 Update data acquisition & results display, generalized to multiple sites, GL
-# 2023-04-09 Generate waq characteristics .csv ,
-#            Condensed Fig2 panel labels & reset 10pm GMT bounds, 
-#            Update GAM with surface water elevation 
-#            Subset model dataset to user-defined time ranges, Guy Litt
-# 2023-04-13 Add timeseries regularization of 15 minutes
-# 2023-04-25 aAIC formula automation: Calculate ARMA model degrees of freedom,
-#           changed n to be length of GAM model residuals, GL
-# 2023-04-28 Assigned NEON 2021 release for all datasets,
-#            Automated Fig 3 x-axis date labeling, GL
-# 2023-05-11 Add SI2 Figure, GL
-# 2023-05-15 Update aAIC file write & tweak figures, GL
+# 2023-05-15 Update analysis using NEON release datasets and automating various steps
 
 #######################
 ### Needed packages ###
