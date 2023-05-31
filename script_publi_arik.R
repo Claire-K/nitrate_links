@@ -63,7 +63,7 @@ waq_cols_sel <- c("startDateTime","horizontalPosition",  "specificConductance","
                   "chlorophyll","chlorophyllFinalQF","turbidity",                
                   "turbidityFinalQF","fDOM","fDOMFinalQFSciRvw")
 # The dimension of the bases used to represent the smooth term. See ?mgcv::s()
-smoothDimK <- 6
+smoothDimK <- 12
 stepGam <- FALSE # Boolean, perform step-wise check on best GAM? Helps decide smoothDimK. Set FALSE to proceed with automatic
 
 # Define the time range and sensor locations to apply the model
