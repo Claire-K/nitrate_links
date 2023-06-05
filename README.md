@@ -1,7 +1,7 @@
 # nitrate_links
 
 Data acquisition, processing, and modeling to understand links between
-water quality and nitrate 
+water quality variables, water depth, and nitrate 
 
 * Companion code to "Understanding links between water-quality 
 variables and nitrate concentration in freshwater streams using 
