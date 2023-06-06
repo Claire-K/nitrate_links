@@ -342,7 +342,7 @@ for(site in neon_sites){
   
   # Assign units: nitrate : micromoles/L; fDOM : QSU; turbidity : FNU, DO : mg/L; SpC microsiemens per Centimeter; 
   dfUnits <-  data.frame(var = names(dataPlot)[-1],
-             units = c("\u03BCMol/L","FNU","°C", "m", "\u03BCS/cm", "mg/L"))
+             units = c("\u03BCMol/L","FNU","Â°C", "m", "\u03BCS/cm", "mg/L"))
   # Add in names useful for plotting
   dfUnits$VarName <- c("Nitrate","Turbidity","Temperature","Surface Water\nElevation","Specific\nConductance","Dissolved\nOxygen")
   
